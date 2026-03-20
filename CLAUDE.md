@@ -17,7 +17,7 @@ npm run build
 ## Architecture
 
 ```
-SQL query → CLI/SDK → QueryEngine → SQLite virtual table → Plugin (sync generator) → API
+SQL query > CLI/SDK > QueryEngine > SQLite virtual table > Plugin (sync generator) > API
 ```
 
 ### Layers
@@ -73,7 +73,7 @@ export default function(dl: DriplinePluginAPI) {
 }
 ```
 
-Plugins are sync generators. `better-sqlite3` virtual tables require synchronous execution — HTTP calls use `execFileSync("curl", ...)` via `syncGet`/`syncGetPaginated`.
+Plugins are sync generators. `better-sqlite3` virtual tables require synchronous execution. HTTP calls use `execFileSync("curl", ...)` via `syncGet`/`syncGetPaginated`.
 
 Key columns become hidden `parameters` in the virtual table. Values are pushed down from WHERE clauses. Non-key WHERE clauses are filtered by SQLite after fetch.
 
@@ -107,7 +107,7 @@ Env vars override config. Plugins declare env var names in `connectionConfigSche
 
 ## Exit Codes
 
-- `0` — success
-- `1` — error
-- `2` — user error
-- `3` — not found
+- `0`. success
+- `1`. error
+- `2`. user error
+- `3`. not found

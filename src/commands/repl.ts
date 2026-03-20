@@ -91,7 +91,7 @@ function handleMeta(line: string): boolean {
       }
       console.log();
       for (const conn of config.connections) {
-        console.log(`  ${chalk.cyan(conn.name)} → ${conn.plugin}`);
+        console.log(`  ${chalk.cyan(conn.name)} > ${conn.plugin}`);
       }
       console.log();
       return true;

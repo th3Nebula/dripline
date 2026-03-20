@@ -40,10 +40,10 @@ dripline
 
 ## How It Works
 
-Plugins define tables backed by API calls. dripline registers them as SQLite virtual tables via `better-sqlite3`. You write SQL — SQLite handles filtering, joins, aggregation. Key columns (like `owner`, `repo`) are pushed down to the API as parameters.
+Plugins define tables backed by API calls. dripline registers them as SQLite virtual tables via `better-sqlite3`. You write SQL. SQLite handles filtering, joins, aggregation. Key columns (like `owner`, `repo`) are pushed down to the API as parameters.
 
 ```
-SQL query → SQLite virtual table → sync generator → API call → yield rows
+SQL query > SQLite virtual table > sync generator > API call > yield rows
 ```
 
 ## Commands
@@ -142,7 +142,7 @@ export default function(dl: DriplinePluginAPI) {
 }
 ```
 
-Plugins are sync generators — `list` yields rows, HTTP calls use `execFileSync("curl", ...)`. Key columns become hidden WHERE parameters pushed down to the API.
+Plugins are sync generators. `list` yields rows, HTTP calls use `execFileSync("curl", ...)`. Key columns become hidden WHERE parameters pushed down to the API.
 
 ## SDK
 

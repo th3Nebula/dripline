@@ -64,7 +64,7 @@ export async function connectionList(options: { json?: boolean }): Promise<void>
       const v = String(conn.config[k]);
       return `${k}=${v.length > 8 ? `${v.slice(0, 4)}...` : v}`;
     });
-    console.log(`  ${chalk.cyan(conn.name)} → ${conn.plugin}  ${dim(masked.join(", "))}`);
+    console.log(`  ${chalk.cyan(conn.name)} > ${conn.plugin}  ${dim(masked.join(", "))}`);
   }
   console.log();
 }
