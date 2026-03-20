@@ -84,7 +84,6 @@ pluginCmd
     await pluginList({ json: globals.json });
   });
 
-// Default to REPL when no command given
 if (process.argv.length <= 2) {
   repl();
 } else {

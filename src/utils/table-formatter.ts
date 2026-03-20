@@ -7,7 +7,6 @@ export function formatTable(
   const maxWidth = options?.maxWidth ?? process.stdout.columns ?? 120;
   const keys = Object.keys(rows[0]);
 
-  // Calculate column widths
   const widths: Record<string, number> = {};
   for (const k of keys) {
     widths[k] = k.length;
@@ -19,9 +18,8 @@ export function formatTable(
     }
   }
 
-  // Cap widths to fit terminal
-  const totalBorder = keys.length + 1; // │ between each + edges
-  const totalPad = keys.length * 2; // 1 space each side
+  const totalBorder = keys.length + 1;
+  const totalPad = keys.length * 2;
   const available = maxWidth - totalBorder - totalPad;
   const totalWidth = Object.values(widths).reduce((a, b) => a + b, 0);
 
@@ -34,29 +32,25 @@ export function formatTable(
 
   const lines: string[] = [];
 
-  // Top border
   lines.push(
     `┌${keys.map((k) => "─".repeat(widths[k] + 2)).join("┬")}┐`,
   );
 
-  // Header
+ 
   lines.push(
     `│${keys.map((k) => ` ${pad(k, widths[k])} `).join("│")}│`,
   );
 
-  // Header separator
   lines.push(
     `├${keys.map((k) => "─".repeat(widths[k] + 2)).join("┼")}┤`,
   );
 
-  // Data rows
   for (const row of rows) {
     lines.push(
       `│${keys.map((k) => ` ${pad(truncate(formatValue(row[k]), widths[k]), widths[k])} `).join("│")}│`,
     );
   }
 
-  // Bottom border
   lines.push(
     `└${keys.map((k) => "─".repeat(widths[k] + 2)).join("┴")}┘`,
   );

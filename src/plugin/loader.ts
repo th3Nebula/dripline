@@ -34,7 +34,6 @@ export async function loadBuiltinPlugins(): Promise<void> {
         const plugin = resolvePluginExport(mod.default, pluginId);
         registry.register(plugin);
       } catch {
-        // skip invalid plugins
       }
     }
   }
@@ -54,10 +53,8 @@ async function loadFromDirectory(dir: string): Promise<PluginDef[]> {
       try {
         plugins.push(await loadPluginFromPath(fullPath));
       } catch {
-        // skip invalid
       }
     } else if (stat.isDirectory()) {
-      // Check for index.ts/index.js
       const indexTs = join(fullPath, "index.ts");
       const indexJs = join(fullPath, "index.js");
       if (existsSync(indexTs)) {
@@ -66,7 +63,6 @@ async function loadFromDirectory(dir: string): Promise<PluginDef[]> {
         try { plugins.push(await loadPluginFromPath(indexJs)); } catch {}
       }
 
-      // Check for package.json with dripline.plugins
       const pkgJson = join(fullPath, "package.json");
       if (existsSync(pkgJson)) {
         try {
@@ -97,11 +93,9 @@ export async function loadPluginsFromConfig(configDir: string): Promise<void> {
         const plugin = await loadPluginFromPath(p);
         registry.register(plugin);
       } catch {
-        // skip
       }
     }
   } catch {
-    // skip malformed
   }
 }
 
@@ -115,25 +109,21 @@ export async function loadAllPlugins(): Promise<void> {
     }
   }
 
-  // 1. Built-in plugins
   await loadBuiltinPlugins();
   for (const p of registry.listPlugins()) {
     loaded.add(p.name);
   }
 
-  // 2. Project-local: .dripline/plugins/
   const configDir = findConfigDir();
   if (configDir) {
     const projectPluginsDir = join(configDir, "plugins");
     const projectPlugins = await loadFromDirectory(projectPluginsDir);
     for (const p of projectPlugins) registerIfNew(p);
 
-    // Also load from plugins.json
     await loadPluginsFromConfig(configDir);
     for (const p of registry.listPlugins()) loaded.add(p.name);
   }
 
-  // 3. Global: ~/.dripline/plugins/
   const globalDir = join(homedir(), ".dripline", "plugins");
   const globalPlugins = await loadFromDirectory(globalDir);
   for (const p of globalPlugins) registerIfNew(p);

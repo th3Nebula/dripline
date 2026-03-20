@@ -66,7 +66,6 @@ export class RateLimiter {
       return;
     }
 
-    // Busy-wait for sync context (virtual table generators are sync)
     while (true) {
       this.refill(bucket);
       if (bucket.tokens >= 1 && bucket.activeConcurrent < bucket.maxConcurrent) {
@@ -74,10 +73,8 @@ export class RateLimiter {
         bucket.activeConcurrent++;
         return;
       }
-      // spin
       const waitUntil = Date.now() + Math.max(1, Math.ceil(1000 / bucket.refillRate));
       while (Date.now() < waitUntil) {
-        // busy wait
       }
     }
   }

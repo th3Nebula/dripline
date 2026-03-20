@@ -102,12 +102,10 @@ export function createPluginAPI(pluginId: string): {
   return { api, resolve };
 }
 
-/** Check if a value is a PluginFunction (vs a static PluginDef) */
 export function isPluginFunction(val: any): val is PluginFunction {
   return typeof val === "function";
 }
 
-/** Resolve a plugin export (function or static) to a PluginDef */
 export function resolvePluginExport(
   exported: PluginFunction | PluginDef,
   pluginId: string,

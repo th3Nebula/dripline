@@ -28,12 +28,10 @@ export class QueryEngine {
   }
 
   initialize(config: DriplineConfig): void {
-    // Configure rate limits
     for (const [scope, rl] of Object.entries(config.rateLimits)) {
       this.rateLimiter.configure(scope, rl);
     }
 
-    // Register all tables from all plugins
     for (const { plugin, table } of this.registry.getAllTables()) {
       const connections = config.connections.filter((c) => c.plugin === plugin);
       this.registerTable(plugin, table, connections);
@@ -47,21 +45,16 @@ export class QueryEngine {
   ): void {
     const engine = this;
 
-    // Build column list for better-sqlite3
     const columns = table.columns.map((c) => c.name);
 
-    // Key columns become hidden parameters
     const keyColNames = (table.keyColumns ?? []).map((k) => k.name);
-    // Filter out key columns from visible columns (they'll be parameters)
     const visibleColumns = columns.filter((c) => !keyColNames.includes(c));
-    // Always add connection as a parameter
     const parameters = [...keyColNames, "_connection"];
 
     this.db.table(table.name, {
       columns: visibleColumns,
       parameters,
       *rows(...paramValues: any[]) {
-        // Map parameter values to key column quals
         const quals: Qual[] = [];
         const paramMap: Record<string, any> = {};
 
@@ -73,12 +66,10 @@ export class QueryEngine {
           }
         }
 
-        // Connection parameter is last
         const connName = paramValues[paramValues.length - 1] as
           | string
           | undefined;
 
-        // Resolve connection
         let connection: ConnectionConfig;
         if (connName) {
           const found = connections.find((c) => c.name === connName);
@@ -103,7 +94,6 @@ export class QueryEngine {
           columns: visibleColumns,
         };
 
-        // Check cache
         const cacheKey = engine.cache.getCacheKey(table.name, quals, visibleColumns);
         const cached = engine.cache.get<Record<string, any>>(cacheKey);
         if (cached) {
@@ -113,13 +103,10 @@ export class QueryEngine {
           return;
         }
 
-        // Rate limit
         engine.rateLimiter.acquireSync(pluginName);
 
-        // Decide get vs list
         let rows: Record<string, any>[] = [];
 
-        // Use get only when ALL key columns have quals
         const allKeyColumns = table.keyColumns ?? [];
         const allKeysProvided = allKeyColumns.length > 0 && allKeyColumns.every((k) =>
           quals.some((q) => q.column === k.name && q.operator === "="),
@@ -139,7 +126,6 @@ export class QueryEngine {
           }
         }
 
-        // Hydrate if needed
         if (table.hydrate) {
           for (let i = 0; i < rows.length; i++) {
             for (const [colName, hydrateFn] of Object.entries(table.hydrate)) {
@@ -151,13 +137,10 @@ export class QueryEngine {
           }
         }
 
-        // Cache results
         engine.cache.set(cacheKey, rows);
 
-        // Release rate limiter
         engine.rateLimiter.release(pluginName);
 
-        // Yield rows, picking only declared columns
         for (const row of rows) {
           const out: Record<string, any> = {};
           for (const col of visibleColumns) {

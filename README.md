@@ -2,8 +2,6 @@
 
 Query cloud APIs using SQL. One drip at a time.
 
-A lightweight Steampipe alternative built on SQLite virtual tables. No PostgreSQL, no FDW, no heavyweight dependencies — just `npm install` and query.
-
 ## Install
 
 ```bash
@@ -86,8 +84,6 @@ GROUP BY r.name;
 ```
 
 ## Writing a Plugin
-
-Plugins use a function-based API inspired by pi's extensions:
 
 ```typescript
 import type { DriplinePluginAPI } from "dripline";
@@ -173,17 +169,6 @@ dripline query "SELECT name FROM github_repos WHERE owner = 'x'" --json
 ```
 
 Run `dripline onboard` to add usage instructions to your agent's context file.
-
-## vs Steampipe
-
-| | Steampipe | dripline |
-|---|---|---|
-| Database | Embedded PostgreSQL | In-memory SQLite |
-| Plugin protocol | gRPC processes | Sync generators (in-process) |
-| Install size | ~500MB | ~50MB |
-| Languages | Go plugins | TypeScript plugins |
-| Startup time | ~5s | ~0.1s |
-| Query features | Full PostgreSQL | SQLite (JOINs, CTEs, JSON, etc.) |
 
 ## License
 

@@ -27,14 +27,11 @@ export interface InstalledPlugin {
 const PLUGINS_FILE = "plugins.json";
 
 export function parsePluginSource(source: string): PluginSource {
-  // npm:@scope/pkg@version or npm:pkg
   if (source.startsWith("npm:")) {
     const rest = source.slice(4);
-    // Handle @scope/pkg@version
     let name: string;
     let ref: string | undefined;
     if (rest.startsWith("@")) {
-      // Scoped: @scope/pkg@version
       const lastAt = rest.lastIndexOf("@");
       if (lastAt > 0 && lastAt !== rest.indexOf("@")) {
         name = rest.slice(0, lastAt);
@@ -54,7 +51,6 @@ export function parsePluginSource(source: string): PluginSource {
     return { type: "npm", name, ref };
   }
 
-  // git:github.com/user/repo@ref or https://...
   if (
     source.startsWith("git:") ||
     source.startsWith("https://") ||
@@ -71,7 +67,6 @@ export function parsePluginSource(source: string): PluginSource {
       raw = raw.slice(0, atIdx);
     }
 
-    // Normalize to https URL
     let url = raw;
     if (!url.startsWith("http://") && !url.startsWith("https://") && !url.startsWith("ssh://")) {
       url = `https://${url}`;
@@ -82,7 +77,6 @@ export function parsePluginSource(source: string): PluginSource {
     return { type: "git", name, url, ref };
   }
 
-  // Local path
   const absPath = resolve(source);
   const name = basename(absPath).replace(/\.(ts|js)$/, "");
   return { type: "local", name, path: absPath };
@@ -164,7 +158,6 @@ export async function installPlugin(
     }
   }
 
-  // Register in plugins.json
   const data = readPluginsJson();
   const existing = data.plugins.findIndex((p) => p.source === source);
   const entry: InstalledPlugin = { source, path: installPath, name: parsed.name };
@@ -188,7 +181,6 @@ export function removePlugin(name: string): boolean {
   const plugin = data.plugins[idx];
   const parsed = parsePluginSource(plugin.source);
 
-  // Remove files for npm/git installs
   if (parsed.type !== "local" && existsSync(plugin.path)) {
     rmSync(plugin.path, { recursive: true, force: true });
   }

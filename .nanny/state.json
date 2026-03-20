@@ -1,186 +1,361 @@
 {
   "version": 1,
-  "goal": "Refactor plugin system: function-based API (pi-inspired) + npm/git/local install",
+  "goal": "Remove AI slop from every source file",
   "maxAttempts": 3,
   "tasks": [
     {
       "id": 1,
-      "description": "Create the new function-based plugin API in src/plugin/api.ts.\n\nDefine `DriplinePluginAPI` interface — the object passed to plugin functions:\n- `registerTable(name: string, def: TableDefinition): void` — register a virtual table\n- `setConnectionSchema(schema: Record<string, SchemaField>): void` — declare what config fields the plugin needs\n- `setName(name: string): void` — set plugin name (optional, defaults to filename)\n- `setVersion(version: string): void` — set version\n- `onInit(fn: (config: Record<string, any>) => void): void` — hook called when connection config is available\n- `log: { info(msg: string): void, warn(msg: string): void, error(msg: string): void }` — logging\n\nWhere `TableDefinition` is essentially the existing `TableDef` minus the name (since name is the first arg).\n\nWhere `SchemaField` is `{ type: 'string' | 'number' | 'boolean', required?: boolean, description?: string, default?: any }`\n\nDefine `PluginFunction` type: `(api: DriplinePluginAPI) => void`\n\nImplement `createPluginAPI(pluginId: string): { api: DriplinePluginAPI, resolve: () => PluginDef }` — creates the API object and a resolve function that returns the built PluginDef after the plugin function runs. Internally collects tables, schema, hooks into a PluginDef.\n\nThe old static PluginDef export should still work. Update src/plugin/loader.ts to detect whether the default export is a function or an object:\n- If function: call `createPluginAPI()`, pass api to function, call `resolve()` to get PluginDef\n- If object with `name` and `tables`: use as-is (backward compat)\n\nExport everything from src/plugin/index.ts.",
+      "description": "Clean src/engine.ts — remove all narrating comments like '// Build column list for better-sqlite3', '// Key columns become hidden parameters', '// Filter out key columns...', '// Always add connection as a parameter', '// Map parameter values to key column quals', '// Connection parameter is last', '// Resolve connection', '// Check cache', '// Rate limit', '// Decide get vs list', '// Use get only when ALL key columns have quals', '// Hydrate if needed', '// Cache results', '// Release rate limiter', '// Yield rows, picking only declared columns', '// Configure rate limits', '// Register all tables from all plugins'. Keep the code exactly the same, just strip these comments.",
       "check": {
-        "command": "npx tsx -e \"import { createPluginAPI } from './src/plugin/api.js'; const { api, resolve } = createPluginAPI('test'); api.setName('test'); api.registerTable('t', { columns: [{ name: 'id', type: 'number' }], *list() { yield { id: 1 }; } }); const p = resolve(); console.log(p.name, p.tables.length); \""
+        "command": "npx tsx -e \"import { QueryEngine } from './src/engine.js'; console.log('ok')\" && ! grep -n '// Build column\\|// Key columns become\\|// Filter out key\\|// Always add connection\\|// Map parameter\\|// Connection parameter\\|// Resolve connection\\|// Check cache\\|// Rate limit\\|// Decide get\\|// Use get only\\|// Hydrate if\\|// Cache results\\|// Release rate\\|// Yield rows\\|// Configure rate\\|// Register all' src/engine.ts"
       },
       "status": "done",
       "attempts": 1,
       "maxAttempts": 3,
-      "startedAt": "2026-03-20T07:47:03.155Z",
-      "finishedAt": "2026-03-20T07:48:01.403Z",
-      "summary": "Plugin API created, loader updated, all tests pass"
+      "startedAt": "2026-03-20T07:59:13.049Z",
+      "finishedAt": "2026-03-20T07:59:30.891Z",
+      "summary": "done"
     },
     {
       "id": 2,
-      "description": "Convert the GitHub plugin (src/plugins/github.ts) to use the new function-based API.\n\nChange from:\n```\nconst github: PluginDef = { name: 'github', ... };\nexport default github;\n```\n\nTo:\n```\nimport type { DriplinePluginAPI } from '../plugin/api.js';\n\nexport default function(dl: DriplinePluginAPI) {\n  dl.setName('github');\n  dl.setVersion('0.1.0');\n  dl.setConnectionSchema({ token: { type: 'string', required: false, description: 'GitHub PAT' } });\n\n  // Shared auth header builder\n  function authHeaders(config: Record<string, any>) { ... }\n\n  dl.registerTable('github_repos', { ... });\n  dl.registerTable('github_issues', { ... });\n  dl.registerTable('github_pull_requests', { ... });\n  dl.registerTable('github_stargazers', { ... });\n}\n```\n\nThe key benefit: shared helper functions (authHeaders, getQual) are naturally scoped inside the plugin function closure. Connection config access is cleaner.\n\nAll existing behavior must be preserved. All existing tests must still pass.",
+      "description": "Clean src/index.ts — remove all section header comments: '// ── SDK entrypoint ──', '// Import dripline as a library:', '//   import { Dripline } from \"dripline\";', '// Core engine', '// Plugin SDK — everything needed to write a plugin', '// Plugin API (for writing plugins)', '// Plugin installer', '// Config', '// Cache & Rate Limiter', '// Formatters', '// HTTP utilities for plugin authors', '// Built-in plugins'. Just keep the exports, no comments.",
       "check": {
-        "command": "npx tsx -e \"import plugin from './src/plugins/github.js'; console.log(typeof plugin)\" && npm test 2>&1 | tail -5"
+        "command": "npx tsx -e \"import { Dripline } from './src/index.js'; console.log('ok')\" && ! grep '// ' src/index.ts"
       },
       "status": "done",
       "attempts": 1,
       "maxAttempts": 3,
-      "startedAt": "2026-03-20T07:48:01.433Z",
-      "finishedAt": "2026-03-20T07:48:51.713Z",
-      "summary": "GitHub plugin converted to function-based, all 187 tests pass"
+      "startedAt": "2026-03-20T07:59:30.926Z",
+      "finishedAt": "2026-03-20T07:59:39.633Z",
+      "summary": "done"
     },
     {
       "id": 3,
-      "description": "Create the plugin installer in src/plugin/installer.ts. This handles `dripline install` and `dripline remove` for npm, git, and local plugins.\n\nImplement:\n\n`parsePluginSource(source: string): { type: 'npm' | 'git' | 'local', name: string, ref?: string, url?: string, path?: string }` — parse install source strings:\n- `npm:@dripline/github@1.0.0` → { type: 'npm', name: '@dripline/github', ref: '1.0.0' }\n- `npm:dripline-plugin-aws` → { type: 'npm', name: 'dripline-plugin-aws' }\n- `git:github.com/user/repo@v1` → { type: 'git', url: 'https://github.com/user/repo.git', ref: 'v1' }\n- `https://github.com/user/repo` → { type: 'git', url: 'https://github.com/user/repo.git' }\n- `./path/to/plugin` → { type: 'local', path: resolved absolute path }\n- `/absolute/path` → { type: 'local', path: '/absolute/path' }\n\n`installPlugin(source: string, options?: { global?: boolean }): Promise<{ path: string, name: string }>` — install a plugin:\n- npm: run `npm install <name>@<ref>` in the plugins dir. For global: `~/.dripline/plugins/npm/`. For project: `.dripline/plugins/npm/`.\n- git: `git clone <url>` into plugins dir. For global: `~/.dripline/plugins/git/<host>/<path>/`. Run `npm install` if package.json exists.\n- local: just validate the path exists, add to config.\n\n`removePlugin(name: string): boolean` — remove from installed list and delete files.\n\n`listInstalled(): Array<{ name: string, type: string, version?: string, path: string }>` — read installed plugins from `.dripline/plugins.json`.\n\nThe plugins.json format:\n```json\n{\n  \"plugins\": [\n    { \"source\": \"npm:@dripline/github@1.0.0\", \"path\": \"./plugins/npm/@dripline/github\" },\n    { \"source\": \"git:github.com/user/repo\", \"path\": \"./plugins/git/github.com/user/repo\" },\n    { \"source\": \"./my-plugin.ts\", \"path\": \"/abs/path/my-plugin.ts\" }\n  ]\n}\n```\n\nUse execSync for npm/git commands. Handle errors gracefully.",
+      "description": "Clean src/commands/repl.ts — remove comments: '// Show key columns that aren't in columns list (parameters)', '// Access cache through engine — we'll need to expose it', '// Load history', '// Meta-commands', '// Save to history'.",
       "check": {
-        "command": "npx tsx -e \"import { parsePluginSource } from './src/plugin/installer.js'; console.log(parsePluginSource('npm:@dripline/github@1.0.0')); console.log(parsePluginSource('git:github.com/user/repo@v1')); console.log(parsePluginSource('./test.ts'));\""
+        "command": "! grep -n '// Show key\\|// Access cache\\|// Load history\\|// Meta-commands\\|// Save to history' src/commands/repl.ts"
       },
       "status": "done",
       "attempts": 1,
       "maxAttempts": 3,
-      "startedAt": "2026-03-20T07:48:51.744Z",
-      "finishedAt": "2026-03-20T07:49:29.804Z",
-      "summary": "Plugin installer created with parse/install/remove/list"
+      "startedAt": "2026-03-20T07:59:39.664Z",
+      "finishedAt": "2026-03-20T07:59:47.154Z",
+      "summary": "done"
     },
     {
       "id": 4,
-      "description": "Update src/plugin/loader.ts to support auto-discovery from conventional directories + installed plugins.\n\nAuto-discovery locations (in order):\n1. Built-in: `src/plugins/` (already works)\n2. Project-local: `.dripline/plugins/*.ts`, `.dripline/plugins/*/index.ts`\n3. Global: `~/.dripline/plugins/*.ts`, `~/.dripline/plugins/*/index.ts`\n4. Installed npm: `.dripline/plugins/npm/*/`, check package.json for `dripline.plugins` paths\n5. Installed git: `.dripline/plugins/git/*/`, check package.json\n\nUpdate `loadPluginFromPath(path: string)` to handle both function and static exports:\n- If default export is a function → create API, call it, resolve to PluginDef\n- If default export has .name and .tables → use as PluginDef directly\n- If neither → throw with helpful error\n\nUpdate `loadBuiltinPlugins()` — already loads from src/plugins/, keep as-is.\n\nAdd `loadAllPlugins(): Promise<void>` — loads from ALL sources (builtin + project + global + installed). Deduplicates by plugin name (project-local wins over global).\n\nUpdate `loadPluginsFromConfig()` to read the new plugins.json format.\n\nExport from src/plugin/index.ts.",
+      "description": "Clean src/plugin/installer.ts — remove comments: '// npm:@scope/pkg@version or npm:pkg', '// Handle @scope/pkg@version', '// Scoped: @scope/pkg@version', '// git:github.com/user/repo@ref or https://...', '// Normalize to https URL', '// Local path', '// Register in plugins.json', '// Remove files for npm/git installs'.",
       "check": {
-        "command": "npx tsx -e \"import { loadAllPlugins } from './src/plugin/loader.js'; import { registry } from './src/plugin/registry.js'; loadAllPlugins().then(() => console.log('loaded:', registry.listPlugins().map(p => p.name)));\""
+        "command": "npx tsx -e \"import { parsePluginSource } from './src/plugin/installer.js'; console.log('ok')\" && ! grep '// npm:\\|// Handle @scope\\|// Scoped:\\|// git:github\\|// Normalize to\\|// Local path\\|// Register in\\|// Remove files' src/plugin/installer.ts"
       },
       "status": "done",
       "attempts": 1,
       "maxAttempts": 3,
-      "startedAt": "2026-03-20T07:49:29.834Z",
-      "finishedAt": "2026-03-20T07:50:10.860Z",
-      "summary": "Loader updated with loadAllPlugins, auto-discovery, 187 tests pass"
+      "startedAt": "2026-03-20T07:59:47.184Z",
+      "finishedAt": "2026-03-20T07:59:58.292Z",
+      "summary": "done"
     },
     {
       "id": 5,
-      "description": "Create CLI commands for plugin management: `dripline plugin install`, `dripline plugin remove`, `dripline plugin list`.\n\nCreate src/commands/plugin.ts with three subcommands:\n\n1. `dripline plugin install <source>` — calls installPlugin(), then loadPluginFromPath() to verify it loads, registers in plugins.json\n   - `--global` flag to install globally\n   - On success: `✓ Installed @dripline/github (4 tables)`\n   - On error: `✗ Failed to install: <error>`\n\n2. `dripline plugin remove <name>` — calls removePlugin()\n   - `✓ Removed @dripline/github`\n\n3. `dripline plugin list` — calls listInstalled() + lists builtin plugins\n   - Shows: name, version, source, table count\n   - `--json` flag for JSON output\n\nRegister in src/main.ts as a Commander subcommand group:\n```\nconst pluginCmd = program.command('plugin').description('Manage plugins');\npluginCmd.command('install <source>').option('-g, --global', 'Install globally').action(...);\npluginCmd.command('remove <name>').action(...);\npluginCmd.command('list').action(...);\n```",
+      "description": "Clean src/plugin/loader.ts — remove comments: '// skip invalid plugins', '// skip invalid', '// Check for index.ts/index.js', '// Check for package.json with dripline.plugins', '// skip', '// skip malformed', '// 1. Built-in plugins', '// 2. Project-local: .dripline/plugins/', '// Also load from plugins.json', '// 3. Global: ~/.dripline/plugins/'.",
       "check": {
-        "command": "npx tsx src/main.ts plugin list 2>&1"
+        "command": "! grep -n '// skip\\|// Check for\\|// 1\\. Built\\|// 2\\. Project\\|// Also load\\|// 3\\. Global' src/plugin/loader.ts"
       },
       "status": "done",
       "attempts": 1,
       "maxAttempts": 3,
-      "startedAt": "2026-03-20T07:50:10.892Z",
-      "finishedAt": "2026-03-20T07:50:45.480Z",
-      "summary": "Plugin CLI commands created"
+      "startedAt": "2026-03-20T07:59:58.325Z",
+      "finishedAt": "2026-03-20T08:00:10.010Z",
+      "summary": "done"
     },
     {
       "id": 6,
-      "description": "Update all tests to work with the new plugin API. Add new tests for the function-based API.\n\nNew tests in src/tests/plugin-api.test.ts:\n1. createPluginAPI returns api and resolve\n2. setName sets plugin name\n3. setVersion sets version\n4. registerTable adds a table\n5. setConnectionSchema sets schema\n6. resolve() returns complete PluginDef\n7. multiple tables can be registered\n8. onInit hook is stored and accessible\n9. default name from pluginId if setName not called\n10. log methods don't throw\n\nNew tests in src/tests/installer.test.ts:\n11. parsePluginSource npm with version\n12. parsePluginSource npm without version\n13. parsePluginSource git shorthand\n14. parsePluginSource git https URL\n15. parsePluginSource local relative path\n16. parsePluginSource local absolute path\n\nUpdate existing tests:\n- github-plugin.test.ts: update to handle function export (call it, check the resolved PluginDef)\n- integration.test.ts: should still pass since mock plugins use static objects (backward compat)\n- engine.test.ts: should still pass\n- sdk.test.ts: should still pass\n\nAll 187+ existing tests must still pass.",
+      "description": "Clean src/plugin/api.ts — remove JSDoc comments '/** Check if a value is a PluginFunction (vs a static PluginDef) */' and '/** Resolve a plugin export (function or static) to a PluginDef */'.",
       "check": {
-        "command": "npm test 2>&1 | tail -10"
+        "command": "! grep '/\\*\\*' src/plugin/api.ts"
       },
       "status": "done",
       "attempts": 1,
       "maxAttempts": 3,
-      "startedAt": "2026-03-20T07:50:45.511Z",
-      "finishedAt": "2026-03-20T07:51:29.035Z",
-      "summary": "25 new tests added, 212 total, all pass"
+      "startedAt": "2026-03-20T08:00:10.041Z",
+      "finishedAt": "2026-03-20T08:00:18.852Z",
+      "summary": "done"
     },
     {
       "id": 7,
-      "description": "Update SDK (src/sdk.ts and src/index.ts) to support function-based plugins.\n\nUpdate Dripline class constructor to accept both:\n```typescript\nnew Dripline({\n  plugins: [\n    githubPlugin,                    // function-based\n    { name: 'x', tables: [...] },    // static object (backward compat)\n  ],\n});\n```\n\nInternally, detect if plugin is a function → run through createPluginAPI → resolve to PluginDef.\n\nUpdate src/index.ts exports:\n- Export DriplinePluginAPI type\n- Export createPluginAPI\n- Export parsePluginSource\n- Export SchemaField type\n- Export PluginFunction type\n\nUpdate README.md plugin authoring section to show the new function-based style.\nUpdate CLAUDE.md plugin docs.",
+      "description": "Clean src/plugins/utils/http.ts — remove comments: '// Response has: headers\\r\\n\\r\\nbody\\nstatus_code', '// Parse response headers', '// Last line is status code', '// Parse Link header for next page'.",
       "check": {
-        "command": "npx tsx -e \"import { Dripline, githubPlugin } from './src/index.js'; const dl = new Dripline({ plugins: [githubPlugin] }); console.log('tables:', dl.tables().length); dl.close();\""
+        "command": "! grep '// Response has\\|// Parse response\\|// Last line\\|// Parse Link' src/plugins/utils/http.ts"
       },
       "status": "done",
       "attempts": 1,
       "maxAttempts": 3,
-      "startedAt": "2026-03-20T07:51:29.066Z",
-      "finishedAt": "2026-03-20T07:52:39.522Z",
-      "summary": "SDK updated, exports added, README updated, 212 tests pass"
+      "startedAt": "2026-03-20T08:00:18.887Z",
+      "finishedAt": "2026-03-20T08:00:29.732Z",
+      "summary": "done"
+    },
+    {
+      "id": 8,
+      "description": "Clean src/rate-limiter.ts — remove comments: '// Busy-wait for sync context (virtual table generators are sync)', '// spin', '// busy wait'.",
+      "check": {
+        "command": "! grep '// Busy-wait\\|// spin\\|// busy wait' src/rate-limiter.ts"
+      },
+      "status": "done",
+      "attempts": 1,
+      "maxAttempts": 3,
+      "startedAt": "2026-03-20T08:00:29.763Z",
+      "finishedAt": "2026-03-20T08:00:37.700Z",
+      "summary": "done"
+    },
+    {
+      "id": 9,
+      "description": "Clean src/sdk.ts — remove the large JSDoc block (/** ... Dripline SDK — query cloud APIs using SQL ... @example ... */), remove inline comments: '// Re-create engine to pick up the new plugin's tables', '// cache is enabled if it exists'. Keep the short /** method docs */ on public methods.",
+      "check": {
+        "command": "! grep 'Re-create engine\\|cache is enabled if\\|query cloud APIs using SQL' src/sdk.ts"
+      },
+      "status": "done",
+      "attempts": 1,
+      "maxAttempts": 3,
+      "startedAt": "2026-03-20T08:00:37.731Z",
+      "finishedAt": "2026-03-20T08:00:57.041Z",
+      "summary": "done"
+    },
+    {
+      "id": 10,
+      "description": "Clean src/utils/table-formatter.ts — remove comments: '// Calculate column widths', '// Cap widths to fit terminal', '// │ between each + edges', '// 1 space each side', '// Top border', '// Header', '// Header separator', '// Data rows', '// Bottom border'.",
+      "check": {
+        "command": "! grep '// Calculate column\\|// Cap widths\\|// │ between\\|// 1 space\\|// Top border\\|// Header$\\|// Header sep\\|// Data rows\\|// Bottom border' src/utils/table-formatter.ts"
+      },
+      "status": "done",
+      "attempts": 1,
+      "maxAttempts": 3,
+      "startedAt": "2026-03-20T08:00:57.072Z",
+      "finishedAt": "2026-03-20T08:01:06.403Z",
+      "summary": "done"
+    },
+    {
+      "id": 11,
+      "description": "Clean src/utils/exit-codes.ts — remove inline comments '// Invalid input, missing args' and '// Data directory not found'.",
+      "check": {
+        "command": "! grep '// Invalid\\|// Data directory' src/utils/exit-codes.ts"
+      },
+      "status": "done",
+      "attempts": 1,
+      "maxAttempts": 3,
+      "startedAt": "2026-03-20T08:01:06.433Z",
+      "finishedAt": "2026-03-20T08:01:13.840Z",
+      "summary": "done"
+    },
+    {
+      "id": 12,
+      "description": "Clean src/main.ts — remove comment '// Default to REPL when no command given'.",
+      "check": {
+        "command": "! grep '// Default to' src/main.ts"
+      },
+      "status": "done",
+      "attempts": 1,
+      "maxAttempts": 3,
+      "startedAt": "2026-03-20T08:01:13.872Z",
+      "finishedAt": "2026-03-20T08:01:21.242Z",
+      "summary": "done"
+    },
+    {
+      "id": 13,
+      "description": "Clean README.md — remove 'A lightweight Steampipe alternative built on SQLite virtual tables. No PostgreSQL, no FDW, no heavyweight dependencies', remove 'Plugins use a function-based API inspired by pi\\'s extensions:', remove the entire '## vs Steampipe' comparison table section. Keep the rest.",
+      "check": {
+        "command": "! grep -i 'steampipe\\|inspired by pi' README.md"
+      },
+      "status": "done",
+      "attempts": 1,
+      "maxAttempts": 3,
+      "startedAt": "2026-03-20T08:01:21.276Z",
+      "finishedAt": "2026-03-20T08:01:50.571Z",
+      "summary": "done"
+    },
+    {
+      "id": 14,
+      "description": "Final pass — run all tests to make sure nothing broke.",
+      "check": {
+        "command": "npm test 2>&1 | tail -5"
+      },
+      "status": "done",
+      "attempts": 1,
+      "maxAttempts": 3,
+      "startedAt": "2026-03-20T08:01:50.601Z",
+      "finishedAt": "2026-03-20T08:02:24.469Z",
+      "summary": "212 tests pass"
     }
   ],
   "log": [
     {
-      "timestamp": "2026-03-20T07:47:03.155Z",
+      "timestamp": "2026-03-20T07:59:13.049Z",
       "taskId": 1,
       "event": "start",
-      "message": "Attempt 1/3: Create the new function-based plugin API in src/plugin/api.ts.\n\nDefine `DriplinePluginAPI` interface — the object passed to plugin functions:\n- `registerTable(name: string, def: TableDefinition): void` — register a virtual table\n- `setConnectionSchema(schema: Record<string, SchemaField>): void` — declare what config fields the plugin needs\n- `setName(name: string): void` — set plugin name (optional, defaults to filename)\n- `setVersion(version: string): void` — set version\n- `onInit(fn: (config: Record<string, any>) => void): void` — hook called when connection config is available\n- `log: { info(msg: string): void, warn(msg: string): void, error(msg: string): void }` — logging\n\nWhere `TableDefinition` is essentially the existing `TableDef` minus the name (since name is the first arg).\n\nWhere `SchemaField` is `{ type: 'string' | 'number' | 'boolean', required?: boolean, description?: string, default?: any }`\n\nDefine `PluginFunction` type: `(api: DriplinePluginAPI) => void`\n\nImplement `createPluginAPI(pluginId: string): { api: DriplinePluginAPI, resolve: () => PluginDef }` — creates the API object and a resolve function that returns the built PluginDef after the plugin function runs. Internally collects tables, schema, hooks into a PluginDef.\n\nThe old static PluginDef export should still work. Update src/plugin/loader.ts to detect whether the default export is a function or an object:\n- If function: call `createPluginAPI()`, pass api to function, call `resolve()` to get PluginDef\n- If object with `name` and `tables`: use as-is (backward compat)\n\nExport everything from src/plugin/index.ts."
+      "message": "Attempt 1/3: Clean src/engine.ts — remove all narrating comments like '// Build column list for better-sqlite3', '// Key columns become hidden parameters', '// Filter out key columns...', '// Always add connection as a parameter', '// Map parameter values to key column quals', '// Connection parameter is last', '// Resolve connection', '// Check cache', '// Rate limit', '// Decide get vs list', '// Use get only when ALL key columns have quals', '// Hydrate if needed', '// Cache results', '// Release rate limiter', '// Yield rows, picking only declared columns', '// Configure rate limits', '// Register all tables from all plugins'. Keep the code exactly the same, just strip these comments."
     },
     {
-      "timestamp": "2026-03-20T07:48:01.403Z",
+      "timestamp": "2026-03-20T07:59:30.891Z",
       "taskId": 1,
       "event": "done",
-      "message": "Plugin API created, loader updated, all tests pass"
+      "message": "done"
     },
     {
-      "timestamp": "2026-03-20T07:48:01.433Z",
+      "timestamp": "2026-03-20T07:59:30.926Z",
       "taskId": 2,
       "event": "start",
-      "message": "Attempt 1/3: Convert the GitHub plugin (src/plugins/github.ts) to use the new function-based API.\n\nChange from:\n```\nconst github: PluginDef = { name: 'github', ... };\nexport default github;\n```\n\nTo:\n```\nimport type { DriplinePluginAPI } from '../plugin/api.js';\n\nexport default function(dl: DriplinePluginAPI) {\n  dl.setName('github');\n  dl.setVersion('0.1.0');\n  dl.setConnectionSchema({ token: { type: 'string', required: false, description: 'GitHub PAT' } });\n\n  // Shared auth header builder\n  function authHeaders(config: Record<string, any>) { ... }\n\n  dl.registerTable('github_repos', { ... });\n  dl.registerTable('github_issues', { ... });\n  dl.registerTable('github_pull_requests', { ... });\n  dl.registerTable('github_stargazers', { ... });\n}\n```\n\nThe key benefit: shared helper functions (authHeaders, getQual) are naturally scoped inside the plugin function closure. Connection config access is cleaner.\n\nAll existing behavior must be preserved. All existing tests must still pass."
+      "message": "Attempt 1/3: Clean src/index.ts — remove all section header comments: '// ── SDK entrypoint ──', '// Import dripline as a library:', '//   import { Dripline } from \"dripline\";', '// Core engine', '// Plugin SDK — everything needed to write a plugin', '// Plugin API (for writing plugins)', '// Plugin installer', '// Config', '// Cache & Rate Limiter', '// Formatters', '// HTTP utilities for plugin authors', '// Built-in plugins'. Just keep the exports, no comments."
     },
     {
-      "timestamp": "2026-03-20T07:48:51.713Z",
+      "timestamp": "2026-03-20T07:59:39.633Z",
       "taskId": 2,
       "event": "done",
-      "message": "GitHub plugin converted to function-based, all 187 tests pass"
+      "message": "done"
     },
     {
-      "timestamp": "2026-03-20T07:48:51.744Z",
+      "timestamp": "2026-03-20T07:59:39.664Z",
       "taskId": 3,
       "event": "start",
-      "message": "Attempt 1/3: Create the plugin installer in src/plugin/installer.ts. This handles `dripline install` and `dripline remove` for npm, git, and local plugins.\n\nImplement:\n\n`parsePluginSource(source: string): { type: 'npm' | 'git' | 'local', name: string, ref?: string, url?: string, path?: string }` — parse install source strings:\n- `npm:@dripline/github@1.0.0` → { type: 'npm', name: '@dripline/github', ref: '1.0.0' }\n- `npm:dripline-plugin-aws` → { type: 'npm', name: 'dripline-plugin-aws' }\n- `git:github.com/user/repo@v1` → { type: 'git', url: 'https://github.com/user/repo.git', ref: 'v1' }\n- `https://github.com/user/repo` → { type: 'git', url: 'https://github.com/user/repo.git' }\n- `./path/to/plugin` → { type: 'local', path: resolved absolute path }\n- `/absolute/path` → { type: 'local', path: '/absolute/path' }\n\n`installPlugin(source: string, options?: { global?: boolean }): Promise<{ path: string, name: string }>` — install a plugin:\n- npm: run `npm install <name>@<ref>` in the plugins dir. For global: `~/.dripline/plugins/npm/`. For project: `.dripline/plugins/npm/`.\n- git: `git clone <url>` into plugins dir. For global: `~/.dripline/plugins/git/<host>/<path>/`. Run `npm install` if package.json exists.\n- local: just validate the path exists, add to config.\n\n`removePlugin(name: string): boolean` — remove from installed list and delete files.\n\n`listInstalled(): Array<{ name: string, type: string, version?: string, path: string }>` — read installed plugins from `.dripline/plugins.json`.\n\nThe plugins.json format:\n```json\n{\n  \"plugins\": [\n    { \"source\": \"npm:@dripline/github@1.0.0\", \"path\": \"./plugins/npm/@dripline/github\" },\n    { \"source\": \"git:github.com/user/repo\", \"path\": \"./plugins/git/github.com/user/repo\" },\n    { \"source\": \"./my-plugin.ts\", \"path\": \"/abs/path/my-plugin.ts\" }\n  ]\n}\n```\n\nUse execSync for npm/git commands. Handle errors gracefully."
+      "message": "Attempt 1/3: Clean src/commands/repl.ts — remove comments: '// Show key columns that aren't in columns list (parameters)', '// Access cache through engine — we'll need to expose it', '// Load history', '// Meta-commands', '// Save to history'."
     },
     {
-      "timestamp": "2026-03-20T07:49:29.804Z",
+      "timestamp": "2026-03-20T07:59:47.154Z",
       "taskId": 3,
       "event": "done",
-      "message": "Plugin installer created with parse/install/remove/list"
+      "message": "done"
     },
     {
-      "timestamp": "2026-03-20T07:49:29.834Z",
+      "timestamp": "2026-03-20T07:59:47.184Z",
       "taskId": 4,
       "event": "start",
-      "message": "Attempt 1/3: Update src/plugin/loader.ts to support auto-discovery from conventional directories + installed plugins.\n\nAuto-discovery locations (in order):\n1. Built-in: `src/plugins/` (already works)\n2. Project-local: `.dripline/plugins/*.ts`, `.dripline/plugins/*/index.ts`\n3. Global: `~/.dripline/plugins/*.ts`, `~/.dripline/plugins/*/index.ts`\n4. Installed npm: `.dripline/plugins/npm/*/`, check package.json for `dripline.plugins` paths\n5. Installed git: `.dripline/plugins/git/*/`, check package.json\n\nUpdate `loadPluginFromPath(path: string)` to handle both function and static exports:\n- If default export is a function → create API, call it, resolve to PluginDef\n- If default export has .name and .tables → use as PluginDef directly\n- If neither → throw with helpful error\n\nUpdate `loadBuiltinPlugins()` — already loads from src/plugins/, keep as-is.\n\nAdd `loadAllPlugins(): Promise<void>` — loads from ALL sources (builtin + project + global + installed). Deduplicates by plugin name (project-local wins over global).\n\nUpdate `loadPluginsFromConfig()` to read the new plugins.json format.\n\nExport from src/plugin/index.ts."
+      "message": "Attempt 1/3: Clean src/plugin/installer.ts — remove comments: '// npm:@scope/pkg@version or npm:pkg', '// Handle @scope/pkg@version', '// Scoped: @scope/pkg@version', '// git:github.com/user/repo@ref or https://...', '// Normalize to https URL', '// Local path', '// Register in plugins.json', '// Remove files for npm/git installs'."
     },
     {
-      "timestamp": "2026-03-20T07:50:10.860Z",
+      "timestamp": "2026-03-20T07:59:58.292Z",
       "taskId": 4,
       "event": "done",
-      "message": "Loader updated with loadAllPlugins, auto-discovery, 187 tests pass"
+      "message": "done"
     },
     {
-      "timestamp": "2026-03-20T07:50:10.892Z",
+      "timestamp": "2026-03-20T07:59:58.325Z",
       "taskId": 5,
       "event": "start",
-      "message": "Attempt 1/3: Create CLI commands for plugin management: `dripline plugin install`, `dripline plugin remove`, `dripline plugin list`.\n\nCreate src/commands/plugin.ts with three subcommands:\n\n1. `dripline plugin install <source>` — calls installPlugin(), then loadPluginFromPath() to verify it loads, registers in plugins.json\n   - `--global` flag to install globally\n   - On success: `✓ Installed @dripline/github (4 tables)`\n   - On error: `✗ Failed to install: <error>`\n\n2. `dripline plugin remove <name>` — calls removePlugin()\n   - `✓ Removed @dripline/github`\n\n3. `dripline plugin list` — calls listInstalled() + lists builtin plugins\n   - Shows: name, version, source, table count\n   - `--json` flag for JSON output\n\nRegister in src/main.ts as a Commander subcommand group:\n```\nconst pluginCmd = program.command('plugin').description('Manage plugins');\npluginCmd.command('install <source>').option('-g, --global', 'Install globally').action(...);\npluginCmd.command('remove <name>').action(...);\npluginCmd.command('list').action(...);\n```"
+      "message": "Attempt 1/3: Clean src/plugin/loader.ts — remove comments: '// skip invalid plugins', '// skip invalid', '// Check for index.ts/index.js', '// Check for package.json with dripline.plugins', '// skip', '// skip malformed', '// 1. Built-in plugins', '// 2. Project-local: .dripline/plugins/', '// Also load from plugins.json', '// 3. Global: ~/.dripline/plugins/'."
     },
     {
-      "timestamp": "2026-03-20T07:50:45.480Z",
+      "timestamp": "2026-03-20T08:00:10.010Z",
       "taskId": 5,
       "event": "done",
-      "message": "Plugin CLI commands created"
+      "message": "done"
     },
     {
-      "timestamp": "2026-03-20T07:50:45.511Z",
+      "timestamp": "2026-03-20T08:00:10.041Z",
       "taskId": 6,
       "event": "start",
-      "message": "Attempt 1/3: Update all tests to work with the new plugin API. Add new tests for the function-based API.\n\nNew tests in src/tests/plugin-api.test.ts:\n1. createPluginAPI returns api and resolve\n2. setName sets plugin name\n3. setVersion sets version\n4. registerTable adds a table\n5. setConnectionSchema sets schema\n6. resolve() returns complete PluginDef\n7. multiple tables can be registered\n8. onInit hook is stored and accessible\n9. default name from pluginId if setName not called\n10. log methods don't throw\n\nNew tests in src/tests/installer.test.ts:\n11. parsePluginSource npm with version\n12. parsePluginSource npm without version\n13. parsePluginSource git shorthand\n14. parsePluginSource git https URL\n15. parsePluginSource local relative path\n16. parsePluginSource local absolute path\n\nUpdate existing tests:\n- github-plugin.test.ts: update to handle function export (call it, check the resolved PluginDef)\n- integration.test.ts: should still pass since mock plugins use static objects (backward compat)\n- engine.test.ts: should still pass\n- sdk.test.ts: should still pass\n\nAll 187+ existing tests must still pass."
+      "message": "Attempt 1/3: Clean src/plugin/api.ts — remove JSDoc comments '/** Check if a value is a PluginFunction (vs a static PluginDef) */' and '/** Resolve a plugin export (function or static) to a PluginDef */'."
     },
     {
-      "timestamp": "2026-03-20T07:51:29.035Z",
+      "timestamp": "2026-03-20T08:00:18.852Z",
       "taskId": 6,
       "event": "done",
-      "message": "25 new tests added, 212 total, all pass"
+      "message": "done"
     },
     {
-      "timestamp": "2026-03-20T07:51:29.066Z",
+      "timestamp": "2026-03-20T08:00:18.887Z",
       "taskId": 7,
       "event": "start",
-      "message": "Attempt 1/3: Update SDK (src/sdk.ts and src/index.ts) to support function-based plugins.\n\nUpdate Dripline class constructor to accept both:\n```typescript\nnew Dripline({\n  plugins: [\n    githubPlugin,                    // function-based\n    { name: 'x', tables: [...] },    // static object (backward compat)\n  ],\n});\n```\n\nInternally, detect if plugin is a function → run through createPluginAPI → resolve to PluginDef.\n\nUpdate src/index.ts exports:\n- Export DriplinePluginAPI type\n- Export createPluginAPI\n- Export parsePluginSource\n- Export SchemaField type\n- Export PluginFunction type\n\nUpdate README.md plugin authoring section to show the new function-based style.\nUpdate CLAUDE.md plugin docs."
+      "message": "Attempt 1/3: Clean src/plugins/utils/http.ts — remove comments: '// Response has: headers\\r\\n\\r\\nbody\\nstatus_code', '// Parse response headers', '// Last line is status code', '// Parse Link header for next page'."
     },
     {
-      "timestamp": "2026-03-20T07:52:39.522Z",
+      "timestamp": "2026-03-20T08:00:29.732Z",
       "taskId": 7,
       "event": "done",
-      "message": "SDK updated, exports added, README updated, 212 tests pass"
+      "message": "done"
+    },
+    {
+      "timestamp": "2026-03-20T08:00:29.763Z",
+      "taskId": 8,
+      "event": "start",
+      "message": "Attempt 1/3: Clean src/rate-limiter.ts — remove comments: '// Busy-wait for sync context (virtual table generators are sync)', '// spin', '// busy wait'."
+    },
+    {
+      "timestamp": "2026-03-20T08:00:37.700Z",
+      "taskId": 8,
+      "event": "done",
+      "message": "done"
+    },
+    {
+      "timestamp": "2026-03-20T08:00:37.731Z",
+      "taskId": 9,
+      "event": "start",
+      "message": "Attempt 1/3: Clean src/sdk.ts — remove the large JSDoc block (/** ... Dripline SDK — query cloud APIs using SQL ... @example ... */), remove inline comments: '// Re-create engine to pick up the new plugin's tables', '// cache is enabled if it exists'. Keep the short /** method docs */ on public methods."
+    },
+    {
+      "timestamp": "2026-03-20T08:00:57.041Z",
+      "taskId": 9,
+      "event": "done",
+      "message": "done"
+    },
+    {
+      "timestamp": "2026-03-20T08:00:57.072Z",
+      "taskId": 10,
+      "event": "start",
+      "message": "Attempt 1/3: Clean src/utils/table-formatter.ts — remove comments: '// Calculate column widths', '// Cap widths to fit terminal', '// │ between each + edges', '// 1 space each side', '// Top border', '// Header', '// Header separator', '// Data rows', '// Bottom border'."
+    },
+    {
+      "timestamp": "2026-03-20T08:01:06.403Z",
+      "taskId": 10,
+      "event": "done",
+      "message": "done"
+    },
+    {
+      "timestamp": "2026-03-20T08:01:06.433Z",
+      "taskId": 11,
+      "event": "start",
+      "message": "Attempt 1/3: Clean src/utils/exit-codes.ts — remove inline comments '// Invalid input, missing args' and '// Data directory not found'."
+    },
+    {
+      "timestamp": "2026-03-20T08:01:13.840Z",
+      "taskId": 11,
+      "event": "done",
+      "message": "done"
+    },
+    {
+      "timestamp": "2026-03-20T08:01:13.872Z",
+      "taskId": 12,
+      "event": "start",
+      "message": "Attempt 1/3: Clean src/main.ts — remove comment '// Default to REPL when no command given'."
+    },
+    {
+      "timestamp": "2026-03-20T08:01:21.243Z",
+      "taskId": 12,
+      "event": "done",
+      "message": "done"
+    },
+    {
+      "timestamp": "2026-03-20T08:01:21.276Z",
+      "taskId": 13,
+      "event": "start",
+      "message": "Attempt 1/3: Clean README.md — remove 'A lightweight Steampipe alternative built on SQLite virtual tables. No PostgreSQL, no FDW, no heavyweight dependencies', remove 'Plugins use a function-based API inspired by pi\\'s extensions:', remove the entire '## vs Steampipe' comparison table section. Keep the rest."
+    },
+    {
+      "timestamp": "2026-03-20T08:01:50.571Z",
+      "taskId": 13,
+      "event": "done",
+      "message": "done"
+    },
+    {
+      "timestamp": "2026-03-20T08:01:50.601Z",
+      "taskId": 14,
+      "event": "start",
+      "message": "Attempt 1/3: Final pass — run all tests to make sure nothing broke."
+    },
+    {
+      "timestamp": "2026-03-20T08:02:24.469Z",
+      "taskId": 14,
+      "event": "done",
+      "message": "212 tests pass"
     }
   ],
-  "createdAt": "2026-03-20T07:45:59.714Z",
-  "updatedAt": "2026-03-20T07:52:39.522Z"
+  "createdAt": "2026-03-20T07:58:23.437Z",
+  "updatedAt": "2026-03-20T08:02:24.469Z"
 }

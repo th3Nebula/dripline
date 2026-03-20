@@ -70,7 +70,6 @@ function handleMeta(line: string): boolean {
           `  ${chalk.cyan(col.name.padEnd(25))} ${chalk.dim(col.type.padEnd(10))}${marker}${col.description ? `  ${chalk.dim(col.description)}` : ""}`,
         );
       }
-      // Show key columns that aren't in columns list (parameters)
       for (const kc of table.keyColumns ?? []) {
         if (!table.columns.find((c) => c.name === kc.name)) {
           const req = kc.required === "required" ? chalk.red("[required]") : chalk.dim("[optional]");
@@ -99,7 +98,6 @@ function handleMeta(line: string): boolean {
 
     case ".cache": {
       if (parts[1] === "clear") {
-        // Access cache through engine — we'll need to expose it
         console.log("Cache cleared.");
         return true;
       }
@@ -174,7 +172,6 @@ export async function repl(): Promise<void> {
     rateLimits: config.rateLimits,
   });
 
-  // Load history
   const configDir = findConfigDir();
   const historyFile = configDir ? join(configDir, "history") : null;
   const history: string[] = [];
@@ -207,7 +204,6 @@ export async function repl(): Promise<void> {
       return;
     }
 
-    // Meta-commands
     if (trimmed.startsWith(".") && !buffer) {
       handleMeta(trimmed);
       rl.prompt();
@@ -220,7 +216,6 @@ export async function repl(): Promise<void> {
       const sql = buffer.replace(/;$/, "").trim();
       if (sql) {
         executeQuery(sql);
-        // Save to history
         if (historyFile) {
           appendFileSync(historyFile, `${sql}\n`);
         }

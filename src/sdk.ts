@@ -19,24 +19,6 @@ export interface DriplineOptions {
   rateLimits?: Record<string, RateLimitConfig>;
 }
 
-/**
- * Dripline SDK — query cloud APIs using SQL.
- *
- * @example
- * ```ts
- * import { Dripline, githubPlugin } from "dripline";
- *
- * const dl = new Dripline({
- *   plugins: [githubPlugin],
- *   connections: [{ name: "gh", plugin: "github", config: { token: "ghp_xxx" } }],
- * });
- *
- * const repos = dl.query("SELECT name, stargazers_count FROM github_repos WHERE owner = 'torvalds' LIMIT 5");
- * console.log(repos);
- *
- * dl.close();
- * ```
- */
 export class Dripline {
   private engine: QueryEngine;
   private registry: PluginRegistry;
@@ -80,11 +62,9 @@ export class Dripline {
   addPlugin(pluginOrFn: PluginDef | PluginFunction, connections?: ConnectionConfig[]): void {
     const plugin = resolvePluginExport(pluginOrFn, "unknown");
     this.registry.register(plugin);
-    // Re-create engine to pick up the new plugin's tables
     const config: DriplineConfig = {
       connections: connections ?? [],
       cache: {
-        enabled: this.cache.stats().size >= 0, // cache is enabled if it exists
         ttl: 300,
         maxSize: 1000,
       },

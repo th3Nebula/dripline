@@ -1,13 +1,8 @@
-// ── SDK entrypoint ──
-// Import dripline as a library:
-//   import { Dripline } from "dripline";
 
 export { Dripline } from "./sdk.js";
 
-// Core engine
 export { QueryEngine, createEngine } from "./engine.js";
 
-// Plugin SDK — everything needed to write a plugin
 export type {
   PluginDef,
   TableDef,
@@ -32,7 +27,6 @@ export {
   loadAllPlugins,
 } from "./plugin/loader.js";
 
-// Plugin API (for writing plugins)
 export { createPluginAPI, resolvePluginExport, isPluginFunction } from "./plugin/api.js";
 export type {
   DriplinePluginAPI,
@@ -41,11 +35,9 @@ export type {
   SchemaField,
 } from "./plugin/api.js";
 
-// Plugin installer
 export { parsePluginSource, installPlugin, removePlugin, listInstalled } from "./plugin/installer.js";
 export type { PluginSource, InstalledPlugin } from "./plugin/installer.js";
 
-// Config
 export type { DriplineConfig, CacheConfig } from "./config/types.js";
 export { DEFAULT_CONFIG } from "./config/types.js";
 export {
@@ -57,16 +49,12 @@ export {
   removeConnection,
 } from "./config/loader.js";
 
-// Cache & Rate Limiter
 export { QueryCache, queryCache, configureCache } from "./cache.js";
 export { RateLimiter, rateLimiter } from "./rate-limiter.js";
 
-// Formatters
 export { formatTable } from "./utils/table-formatter.js";
 export { formatJson, formatCsv, formatLine } from "./utils/formatters.js";
 
-// HTTP utilities for plugin authors
 export { syncGet, syncGetPaginated } from "./plugins/utils/http.js";
 
-// Built-in plugins
 export { default as githubPlugin } from "./plugins/github.js";

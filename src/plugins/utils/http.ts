@@ -25,12 +25,10 @@ export function syncGet(
     encoding: "utf-8",
   });
 
-  // Response has: headers\r\n\r\nbody\nstatus_code
   const headerEnd = raw.indexOf("\r\n\r\n");
   const headerSection = raw.slice(0, headerEnd);
   const rest = raw.slice(headerEnd + 4);
 
-  // Parse response headers
   const parsedHeaders: Record<string, string> = {};
   for (const line of headerSection.split("\r\n")) {
     const colonIdx = line.indexOf(":");
@@ -41,7 +39,6 @@ export function syncGet(
     }
   }
 
-  // Last line is status code
   const lines = rest.trimEnd().split("\n");
   const statusCode = parseInt(lines.pop() || "0", 10);
   const bodyStr = lines.join("\n");
@@ -78,7 +75,6 @@ export function syncGetPaginated(
       results.push(resp.body);
     }
 
-    // Parse Link header for next page
     nextUrl = null;
     const link = resp.headers.link;
     if (link) {
