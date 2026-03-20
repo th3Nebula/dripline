@@ -97,7 +97,7 @@ GROUP BY r.name;
 
 ### Mix APIs with anything
 
-Powered by DuckDB. Query APIs, local files, remote files, and databases in the same SQL:
+Query APIs, local files, remote files, and databases in the same SQL:
 
 ```sql
 -- Join GitHub stars with revenue data from a CSV
