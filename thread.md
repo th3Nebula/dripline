@@ -1,4 +1,4 @@
-1/ if there's code mode, there's query mode.
+1/ if there's code mode, there's also query mode.
 
 introducing dripline — turns any api, cli, or cloud service into a sql table. install a plugin, write a query, get rows back. joins, aggregations, window functions — duckdb handles the rest.
 
