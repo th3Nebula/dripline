@@ -14,7 +14,7 @@ let listCalls: number;
 let getCalls: number;
 let lastCtx: QueryContext | null;
 
-function setup(opts?: { cacheEnabled?: boolean; plugins?: PluginDef[] }) {
+async function setup(opts?: { cacheEnabled?: boolean; plugins?: PluginDef[] }) {
   reg = new PluginRegistry();
   cache = new QueryCache({ enabled: opts?.cacheEnabled ?? true });
   rl = new RateLimiter();
@@ -44,7 +44,7 @@ function setup(opts?: { cacheEnabled?: boolean; plugins?: PluginDef[] }) {
           ];
           for (const d of data) {
             if (role && d.role !== role) continue;
-            yield { id: d.id, name: d.name };
+            yield { id: d.id, name: d.name, role: d.role };
           }
         },
       },
@@ -65,97 +65,97 @@ function setup(opts?: { cacheEnabled?: boolean; plugins?: PluginDef[] }) {
   }
 
   engine = new QueryEngine(reg, cache, rl);
-  engine.initialize({
+  await engine.initialize({
     connections: [],
     cache: { enabled: opts?.cacheEnabled ?? true, ttl: 300, maxSize: 100 },
     rateLimits: {},
   });
 }
 
-function teardown() {
-  engine?.close();
+async function teardown() {
+  try { await engine?.close(); } catch {}
 }
 
 describe("QueryEngine", () => {
-  afterEach(() => teardown());
+  afterEach(async () => await teardown());
 
-  it("query returns results", () => {
-    setup();
-    const rows = engine.query("SELECT * FROM users");
+  it("query returns results", async () => {
+    await setup();
+    const rows = await engine.query("SELECT * FROM users");
     assert.equal(rows.length, 3);
   });
 
-  it("key columns pushed down as parameters", () => {
-    setup();
-    engine.query("SELECT * FROM users WHERE role = 'admin'");
+  it("key columns pushed down as parameters", async () => {
+    await setup();
+    await engine.query("SELECT * FROM users WHERE role = 'admin'");
     assert.ok(lastCtx);
     assert.equal(lastCtx.quals[0].column, "role");
     assert.equal(lastCtx.quals[0].value, "admin");
   });
 
-  it("non-key WHERE filtered by SQLite", () => {
-    setup();
-    const rows = engine.query("SELECT * FROM users WHERE name = 'Alice'");
+  it("non-key WHERE filtered by DuckDB", async () => {
+    await setup();
+    const rows = await engine.query("SELECT * FROM users WHERE name = 'Alice'");
     assert.equal(rows.length, 1);
     assert.equal((rows[0] as any).name, "Alice");
   });
 
-  it("cache prevents second plugin call", () => {
-    setup();
-    engine.query("SELECT * FROM users");
+  it("cache prevents second plugin call", async () => {
+    await setup();
+    await engine.query("SELECT * FROM users");
     assert.equal(listCalls, 1);
-    engine.query("SELECT * FROM users");
-    assert.equal(listCalls, 1); // still 1 — cache hit
+    await engine.query("SELECT * FROM users");
+    assert.equal(listCalls, 1);
     assert.equal(cache.stats().hits, 1);
   });
 
-  it("cache disabled — list called every time", () => {
-    setup({ cacheEnabled: false });
-    engine.query("SELECT * FROM users");
-    engine.query("SELECT * FROM users");
+  it("cache disabled - list called every time", async () => {
+    await setup({ cacheEnabled: false });
+    await engine.query("SELECT * FROM users");
+    await engine.query("SELECT * FROM users");
     assert.equal(listCalls, 2);
   });
 
-  it("get path used when all key columns have quals and get returns non-null", () => {
-    setup({
+  it("get path used when all key columns have quals and get returns non-null", async () => {
+    await setup({
       plugins: [{
         name: "p", version: "0.1.0",
         tables: [{
           name: "things",
           columns: [{ name: "id", type: "number" }, { name: "v", type: "string" }],
           keyColumns: [{ name: "k", required: "required" }],
-          *list() { listCalls++; yield { id: 1, v: "from-list" }; },
-          get(ctx) { getCalls++; return { id: 99, v: "from-get" }; },
+          *list() { listCalls++; yield { id: 1, v: "from-list", k: "x" }; },
+          get(ctx) { getCalls++; return { id: 99, v: "from-get", k: ctx.quals[0]?.value }; },
         }],
       }],
     });
-    const rows = engine.query("SELECT * FROM things WHERE k = 'x'") as any[];
+    const rows = await engine.query("SELECT * FROM things WHERE k = 'x'") as any[];
     assert.equal(getCalls, 1);
     assert.equal(listCalls, 0);
     assert.equal(rows[0].v, "from-get");
   });
 
-  it("get returns null falls back to list", () => {
-    setup({
+  it("get returns null falls back to list", async () => {
+    await setup({
       plugins: [{
         name: "p", version: "0.1.0",
         tables: [{
           name: "things",
           columns: [{ name: "id", type: "number" }],
           keyColumns: [{ name: "k", required: "required" }],
-          *list() { listCalls++; yield { id: 1 }; },
+          *list() { listCalls++; yield { id: 1, k: "x" }; },
           get() { getCalls++; return null; },
         }],
       }],
     });
-    const rows = engine.query("SELECT * FROM things WHERE k = 'x'");
+    const rows = await engine.query("SELECT * FROM things WHERE k = 'x'");
     assert.equal(getCalls, 1);
     assert.equal(listCalls, 1);
     assert.equal(rows.length, 1);
   });
 
-  it("get not used when not all key columns provided", () => {
-    setup({
+  it("get not used when not all key columns provided", async () => {
+    await setup({
       plugins: [{
         name: "p", version: "0.1.0",
         tables: [{
@@ -165,18 +165,18 @@ describe("QueryEngine", () => {
             { name: "a", required: "required" },
             { name: "b", required: "required" },
           ],
-          *list() { listCalls++; yield { id: 1 }; },
-          get() { getCalls++; return { id: 99 }; },
+          *list() { listCalls++; yield { id: 1, a: "x", b: "y" }; },
+          get() { getCalls++; return { id: 99, a: "x", b: "y" }; },
         }],
       }],
     });
-    engine.query("SELECT * FROM things WHERE a = 'x'"); // missing b
+    await engine.query("SELECT * FROM things WHERE a = 'x'");
     assert.equal(getCalls, 0);
     assert.equal(listCalls, 1);
   });
 
-  it("hydrate functions enrich rows", () => {
-    setup({
+  it("hydrate functions enrich rows", async () => {
+    await setup({
       plugins: [{
         name: "p", version: "0.1.0",
         tables: [{
@@ -192,11 +192,11 @@ describe("QueryEngine", () => {
         }],
       }],
     });
-    const rows = engine.query("SELECT * FROM things") as any[];
+    const rows = await engine.query("SELECT * FROM things") as any[];
     assert.equal(rows[0].extra, "hydrated-1");
   });
 
-  it("connection resolved from config when single connection", () => {
+  it("connection resolved from config when single connection", async () => {
     reg = new PluginRegistry();
     cache = new QueryCache();
     rl = new RateLimiter();
@@ -212,68 +212,68 @@ describe("QueryEngine", () => {
     });
 
     engine = new QueryEngine(reg, cache, rl);
-    engine.initialize({
+    await engine.initialize({
       connections: [{ name: "myconn", plugin: "p", config: { key: "val" } }],
       cache: { enabled: true, ttl: 300, maxSize: 100 },
       rateLimits: {},
     });
 
-    engine.query("SELECT * FROM things");
+    await engine.query("SELECT * FROM things");
     assert.ok(lastCtx);
     assert.equal(lastCtx.connection.name, "myconn");
     assert.equal(lastCtx.connection.config.key, "val");
   });
 
-  it("default connection when no config", () => {
-    setup();
-    engine.query("SELECT * FROM users");
+  it("default connection when no config", async () => {
+    await setup();
+    await engine.query("SELECT * FROM users");
     assert.ok(lastCtx);
     assert.equal(lastCtx.connection.name, "default");
   });
 
-  it("query with params", () => {
-    setup();
-    const rows = engine.query("SELECT * FROM users WHERE name = ?", ["Bob"]);
+  it("query with params", async () => {
+    await setup();
+    const rows = await engine.query("SELECT * FROM users WHERE name = $1", ["Bob"]);
     assert.equal(rows.length, 1);
   });
 
-  it("close() closes the database", () => {
-    setup();
-    engine.close();
-    assert.throws(() => engine.query("SELECT 1"));
+  it("close() closes the database", async () => {
+    await setup();
+    await engine.close();
+    await assert.rejects(() => engine.query("SELECT 1"));
   });
 
-  it("multiple tables from same plugin", () => {
-    setup();
-    const users = engine.query("SELECT * FROM users");
-    const items = engine.query("SELECT * FROM items");
+  it("multiple tables from same plugin", async () => {
+    await setup();
+    const users = await engine.query("SELECT * FROM users");
+    const items = await engine.query("SELECT * FROM items");
     assert.equal(users.length, 3);
     assert.equal(items.length, 2);
   });
 
-  it("tables from different plugins", () => {
-    setup({
+  it("tables from different plugins", async () => {
+    await setup({
       plugins: [
         { name: "a", version: "0.1.0", tables: [{ name: "ta", columns: [{ name: "id", type: "number" }], *list() { yield { id: 1 }; } }] },
         { name: "b", version: "0.1.0", tables: [{ name: "tb", columns: [{ name: "id", type: "number" }], *list() { yield { id: 2 }; } }] },
       ],
     });
-    assert.equal((engine.query("SELECT * FROM ta") as any[])[0].id, 1);
-    assert.equal((engine.query("SELECT * FROM tb") as any[])[0].id, 2);
+    assert.equal((await engine.query("SELECT * FROM ta") as any[])[0].id, 1);
+    assert.equal((await engine.query("SELECT * FROM tb") as any[])[0].id, 2);
   });
 
-  it("empty list returns no rows", () => {
-    setup({
+  it("empty list returns no rows", async () => {
+    await setup({
       plugins: [{
         name: "p", version: "0.1.0",
         tables: [{ name: "empty", columns: [{ name: "id", type: "number" }], *list() {} }],
       }],
     });
-    assert.equal(engine.query("SELECT * FROM empty").length, 0);
+    assert.equal((await engine.query("SELECT * FROM empty")).length, 0);
   });
 
-  it("plugin error propagates", () => {
-    setup({
+  it("plugin error propagates", async () => {
+    await setup({
       plugins: [{
         name: "p", version: "0.1.0",
         tables: [{
@@ -283,6 +283,6 @@ describe("QueryEngine", () => {
         }],
       }],
     });
-    assert.throws(() => engine.query("SELECT * FROM broken"), /boom/);
+    await assert.rejects(() => engine.query("SELECT * FROM broken"), /boom/);
   });
 });

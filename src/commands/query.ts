@@ -16,7 +16,7 @@ export async function query(
   await loadBuiltinPlugins();
 
   const config = loadConfig();
-  const dl = new Dripline({
+  const dl = await Dripline.create({
     plugins: registry.listPlugins(),
     connections: config.connections,
     cache: config.cache,
@@ -28,7 +28,7 @@ export async function query(
     const showSpinner = !options.json && !options.quiet && format !== "json";
     const spinner = showSpinner ? startSpinner("Querying...") : null;
     const start = performance.now();
-    const rows = dl.query(sql);
+    const rows = await dl.query(sql);
     const elapsed = ((performance.now() - start) / 1000).toFixed(3);
     spinner?.stop();
 
@@ -54,6 +54,6 @@ export async function query(
     error(e.message);
     process.exit(1);
   } finally {
-    dl.close();
+    await dl.close();
   }
 }

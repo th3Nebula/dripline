@@ -111,13 +111,13 @@ let engine: QueryEngine;
 let cache: QueryCache;
 let rl: RateLimiter;
 
-function setup() {
+async function setup() {
   const reg = new PluginRegistry();
   reg.register(mockPlugin);
   cache = new QueryCache({ enabled: true, ttl: 300, maxSize: 100 });
   rl = new RateLimiter();
   engine = new QueryEngine(reg, cache, rl);
-  engine.initialize({
+  await engine.initialize({
     connections: [],
     cache: { enabled: true, ttl: 300, maxSize: 100 },
     rateLimits: {},
@@ -125,42 +125,42 @@ function setup() {
   listCallCount = 0;
 }
 
-function teardown() {
-  engine.close();
+async function teardown() {
+  await engine.close();
 }
 
 // ── Tests ──
 
 describe("Basic queries", () => {
-  beforeEach(() => setup());
-  afterEach(() => teardown());
+  beforeEach(async () => await setup());
+  afterEach(async () => await teardown());
 
-  it("SELECT * FROM mock_users returns all 10", () => {
-    const rows = engine.query("SELECT * FROM mock_users");
+  it("SELECT * FROM mock_users returns all 10", async () => {
+    const rows = await engine.query("SELECT * FROM mock_users");
     assert.equal(rows.length, 10);
   });
 
-  it("WHERE on key column filters at plugin level", () => {
-    const rows = engine.query("SELECT * FROM mock_users WHERE role = 'admin'");
+  it("WHERE on key column filters at plugin level", async () => {
+    const rows = await engine.query("SELECT * FROM mock_users WHERE role = 'admin'");
     assert.equal(rows.length, 3);
     for (const row of rows) {
       // role is a parameter, not in visible columns
     }
   });
 
-  it("WHERE on non-key column filtered by SQLite", () => {
-    const rows = engine.query("SELECT * FROM mock_users WHERE name = 'Alice'");
+  it("WHERE on non-key column filtered by SQLite", async () => {
+    const rows = await engine.query("SELECT * FROM mock_users WHERE name = 'Alice'");
     assert.equal(rows.length, 1);
     assert.equal((rows[0] as any).name, "Alice");
   });
 });
 
 describe("JOINs", () => {
-  beforeEach(() => setup());
-  afterEach(() => teardown());
+  beforeEach(async () => await setup());
+  afterEach(async () => await teardown());
 
-  it("JOIN mock_users and mock_orders", () => {
-    const rows = engine.query(`
+  it("JOIN mock_users and mock_orders", async () => {
+    const rows = await engine.query(`
       SELECT u.name, o.amount, o.created_at
       FROM mock_users u
       JOIN mock_orders o ON u.id = o.user_id
@@ -169,8 +169,8 @@ describe("JOINs", () => {
     assert.equal(rows.length, 2); // user_id 1 appears twice in 20 orders
   });
 
-  it("LEFT JOIN with empty table", () => {
-    const rows = engine.query(`
+  it("LEFT JOIN with empty table", async () => {
+    const rows = await engine.query(`
       SELECT u.name, e.id as eid
       FROM mock_users u
       LEFT JOIN mock_empty e ON u.id = e.id
@@ -181,11 +181,11 @@ describe("JOINs", () => {
 });
 
 describe("Aggregation", () => {
-  beforeEach(() => setup());
-  afterEach(() => teardown());
+  beforeEach(async () => await setup());
+  afterEach(async () => await teardown());
 
-  it("GROUP BY with COUNT", () => {
-    const rows = engine.query(`
+  it("GROUP BY with COUNT", async () => {
+    const rows = await engine.query(`
       SELECT active, COUNT(*) as cnt
       FROM mock_users
       GROUP BY active
@@ -193,14 +193,14 @@ describe("Aggregation", () => {
     assert.equal(rows.length, 2);
   });
 
-  it("SUM aggregation", () => {
-    const rows = engine.query("SELECT SUM(amount) as total FROM mock_orders");
+  it("SUM aggregation", async () => {
+    const rows = await engine.query("SELECT SUM(amount) as total FROM mock_orders");
     assert.equal(rows.length, 1);
     assert.ok((rows[0] as any).total > 0);
   });
 
-  it("HAVING clause", () => {
-    const rows = engine.query(`
+  it("HAVING clause", async () => {
+    const rows = await engine.query(`
       SELECT active, COUNT(*) as cnt
       FROM mock_users
       GROUP BY active
@@ -209,26 +209,26 @@ describe("Aggregation", () => {
     assert.ok(rows.length >= 1);
   });
 
-  it("DISTINCT", () => {
-    const rows = engine.query("SELECT DISTINCT active FROM mock_users");
+  it("DISTINCT", async () => {
+    const rows = await engine.query("SELECT DISTINCT active FROM mock_users");
     assert.equal(rows.length, 2);
   });
 });
 
 describe("Subqueries", () => {
-  beforeEach(() => setup());
-  afterEach(() => teardown());
+  beforeEach(async () => await setup());
+  afterEach(async () => await teardown());
 
-  it("subquery in WHERE", () => {
-    const rows = engine.query(`
+  it("subquery in WHERE", async () => {
+    const rows = await engine.query(`
       SELECT * FROM mock_users
       WHERE id IN (SELECT user_id FROM mock_orders WHERE amount > 100)
     `);
     assert.ok(rows.length > 0);
   });
 
-  it("derived table", () => {
-    const rows = engine.query(`
+  it("derived table", async () => {
+    const rows = await engine.query(`
       SELECT * FROM (
         SELECT active, COUNT(*) as cnt FROM mock_users GROUP BY active
       ) sub WHERE sub.cnt > 0
@@ -238,59 +238,59 @@ describe("Subqueries", () => {
 });
 
 describe("LIMIT and OFFSET", () => {
-  beforeEach(() => setup());
-  afterEach(() => teardown());
+  beforeEach(async () => await setup());
+  afterEach(async () => await teardown());
 
-  it("LIMIT", () => {
-    const rows = engine.query("SELECT * FROM mock_users LIMIT 3");
+  it("LIMIT", async () => {
+    const rows = await engine.query("SELECT * FROM mock_users LIMIT 3");
     assert.equal(rows.length, 3);
   });
 
-  it("LIMIT with OFFSET", () => {
-    const rows = engine.query("SELECT * FROM mock_users LIMIT 2 OFFSET 5");
+  it("LIMIT with OFFSET", async () => {
+    const rows = await engine.query("SELECT * FROM mock_users LIMIT 2 OFFSET 5");
     assert.equal(rows.length, 2);
   });
 
-  it("LIMIT 0", () => {
-    const rows = engine.query("SELECT * FROM mock_users LIMIT 0");
+  it("LIMIT 0", async () => {
+    const rows = await engine.query("SELECT * FROM mock_users LIMIT 0");
     assert.equal(rows.length, 0);
   });
 });
 
 describe("ORDER BY", () => {
-  beforeEach(() => setup());
-  afterEach(() => teardown());
+  beforeEach(async () => await setup());
+  afterEach(async () => await teardown());
 
-  it("ORDER BY ASC", () => {
-    const rows = engine.query("SELECT * FROM mock_users ORDER BY id ASC") as any[];
+  it("ORDER BY ASC", async () => {
+    const rows = await engine.query("SELECT * FROM mock_users ORDER BY id ASC") as any[];
     assert.equal(rows[0].id, 1);
   });
 
-  it("ORDER BY DESC", () => {
-    const rows = engine.query("SELECT * FROM mock_users ORDER BY id DESC") as any[];
+  it("ORDER BY DESC", async () => {
+    const rows = await engine.query("SELECT * FROM mock_users ORDER BY id DESC") as any[];
     assert.equal(rows[0].id, 10);
   });
 });
 
 describe("NULL handling", () => {
-  beforeEach(() => setup());
-  afterEach(() => teardown());
+  beforeEach(async () => await setup());
+  afterEach(async () => await teardown());
 
-  it("IS NULL", () => {
-    const rows = engine.query("SELECT * FROM mock_users WHERE email IS NULL");
+  it("IS NULL", async () => {
+    const rows = await engine.query("SELECT * FROM mock_users WHERE email IS NULL");
     assert.equal(rows.length, 1);
     assert.equal((rows[0] as any).name, "Frank");
   });
 
-  it("COALESCE", () => {
-    const rows = engine.query(
+  it("COALESCE", async () => {
+    const rows = await engine.query(
       "SELECT COALESCE(email, 'none') as email FROM mock_users WHERE name = 'Frank'",
     ) as any[];
     assert.equal(rows[0].email, "none");
   });
 
-  it("COUNT(col) vs COUNT(*)", () => {
-    const rows = engine.query(
+  it("COUNT(col) vs COUNT(*)", async () => {
+    const rows = await engine.query(
       "SELECT COUNT(email) as c, COUNT(*) as total FROM mock_users",
     ) as any[];
     assert.equal(rows[0].c, 9);
@@ -299,67 +299,67 @@ describe("NULL handling", () => {
 });
 
 describe("Cache", () => {
-  beforeEach(() => setup());
-  afterEach(() => teardown());
+  beforeEach(async () => await setup());
+  afterEach(async () => await teardown());
 
-  it("cache hit on second query", () => {
-    engine.query("SELECT * FROM mock_users");
+  it("cache hit on second query", async () => {
+    await engine.query("SELECT * FROM mock_users");
     const before = cache.stats().hits;
-    engine.query("SELECT * FROM mock_users");
+    await engine.query("SELECT * FROM mock_users");
     assert.equal(cache.stats().hits, before + 1);
   });
 });
 
 describe("JSON handling", () => {
-  beforeEach(() => setup());
-  afterEach(() => teardown());
+  beforeEach(async () => await setup());
+  afterEach(async () => await teardown());
 
-  it("json_extract on JSON column", () => {
-    const rows = engine.query(
-      "SELECT json_extract(metadata, '$.source') as source FROM mock_orders WHERE id = 1",
+  it("json_extract on JSON column", async () => {
+    const rows = await engine.query(
+      "SELECT metadata->>'source' as source FROM mock_orders WHERE id = 1",
     ) as any[];
     assert.equal(rows[0].source, "web");
   });
 });
 
 describe("Empty results", () => {
-  beforeEach(() => setup());
-  afterEach(() => teardown());
+  beforeEach(async () => await setup());
+  afterEach(async () => await teardown());
 
-  it("empty table", () => {
-    const rows = engine.query("SELECT * FROM mock_empty");
+  it("empty table", async () => {
+    const rows = await engine.query("SELECT * FROM mock_empty");
     assert.equal(rows.length, 0);
   });
 
-  it("no matching rows", () => {
-    const rows = engine.query("SELECT * FROM mock_users WHERE name = 'Nobody'");
+  it("no matching rows", async () => {
+    const rows = await engine.query("SELECT * FROM mock_users WHERE name = 'Nobody'");
     assert.equal(rows.length, 0);
   });
 });
 
 describe("Error handling", () => {
-  beforeEach(() => setup());
-  afterEach(() => teardown());
+  beforeEach(async () => await setup());
+  afterEach(async () => await teardown());
 
-  it("plugin error propagates", () => {
-    assert.throws(
+  it("plugin error propagates", async () => {
+    await assert.rejects(
       () => engine.query("SELECT * FROM mock_error WHERE should_error = 'yes'"),
       /rate limit/,
     );
   });
 
-  it("plugin success when no error", () => {
-    const rows = engine.query("SELECT * FROM mock_error WHERE should_error = 'no'");
+  it("plugin success when no error", async () => {
+    const rows = await engine.query("SELECT * FROM mock_error WHERE should_error = 'no'");
     assert.equal(rows.length, 1);
   });
 });
 
 describe("CTE", () => {
-  beforeEach(() => setup());
-  afterEach(() => teardown());
+  beforeEach(async () => await setup());
+  afterEach(async () => await teardown());
 
-  it("WITH clause works", () => {
-    const rows = engine.query(`
+  it("WITH clause works", async () => {
+    const rows = await engine.query(`
       WITH active_users AS (
         SELECT * FROM mock_users WHERE active = 1
       )
@@ -370,11 +370,11 @@ describe("CTE", () => {
 });
 
 describe("UNION", () => {
-  beforeEach(() => setup());
-  afterEach(() => teardown());
+  beforeEach(async () => await setup());
+  afterEach(async () => await teardown());
 
-  it("UNION across tables", () => {
-    const rows = engine.query(`
+  it("UNION across tables", async () => {
+    const rows = await engine.query(`
       SELECT name FROM mock_users WHERE id <= 2
       UNION
       SELECT name FROM mock_users WHERE id = 2

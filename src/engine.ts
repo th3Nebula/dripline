@@ -1,4 +1,4 @@
-import Database from "better-sqlite3";
+import { Database } from "duckdb-async";
 import type { DriplineConfig } from "./config/types.js";
 import { QueryCache } from "./cache.js";
 import { RateLimiter } from "./rate-limiter.js";
@@ -11,24 +11,35 @@ import type {
 } from "./plugin/types.js";
 import { resolveEnvConnection, applyEnvOverrides } from "./config/loader.js";
 
+interface RegisteredTable {
+  pluginName: string;
+  table: TableDef;
+  connections: ConnectionConfig[];
+  schema?: Record<string, { env?: string }>;
+  keyColNames: string[];
+  allColumns: string[];
+}
+
 export class QueryEngine {
-  private db: Database.Database;
+  private db!: Database;
   private registry: PluginRegistry;
   private cache: QueryCache;
   private rateLimiter: RateLimiter;
+  private tables: Map<string, RegisteredTable> = new Map();
 
   constructor(
     registry: PluginRegistry,
     cache: QueryCache,
     rateLimiter: RateLimiter,
   ) {
-    this.db = new Database(":memory:");
     this.registry = registry;
     this.cache = cache;
     this.rateLimiter = rateLimiter;
   }
 
-  initialize(config: DriplineConfig): void {
+  async initialize(config: DriplineConfig): Promise<void> {
+    this.db = await Database.create(":memory:");
+
     for (const [scope, rl] of Object.entries(config.rateLimits)) {
       this.rateLimiter.configure(scope, rl);
     }
@@ -36,147 +47,218 @@ export class QueryEngine {
     for (const { plugin, table } of this.registry.getAllTables()) {
       const connections = config.connections.filter((c) => c.plugin === plugin);
       const pluginDef = this.registry.getPlugin(plugin);
-      this.registerTable(plugin, table, connections, pluginDef?.connectionConfigSchema);
+      await this.registerTable(plugin, table, connections, pluginDef?.connectionConfigSchema);
     }
   }
 
-  private registerTable(
+  private async registerTable(
     pluginName: string,
     table: TableDef,
     connections: ConnectionConfig[],
     schema?: Record<string, { env?: string }>,
-  ): void {
-    const engine = this;
-
-    const columns = table.columns.map((c) => c.name);
-
+  ): Promise<void> {
     const keyColNames = (table.keyColumns ?? []).map((k) => k.name);
-    const visibleColumns = columns.filter((c) => !keyColNames.includes(c));
-    const parameters = [...keyColNames, "_connection"];
+    const allColumns = [...table.columns.map((c) => c.name), ...keyColNames];
+    const uniqueColumns = [...new Set(allColumns)];
 
-    this.db.table(table.name, {
-      columns: visibleColumns,
-      parameters,
-      *rows(...paramValues: any[]) {
-        const quals: Qual[] = [];
-        const paramMap: Record<string, any> = {};
+    const colDefs = uniqueColumns.map((name) => {
+      const col = table.columns.find((c) => c.name === name);
+      const duckType = col ? toDuckType(col.type) : "VARCHAR";
+      return `"${name}" ${duckType}`;
+    });
 
-        for (let i = 0; i < keyColNames.length; i++) {
-          const val = paramValues[i];
-          if (val !== undefined && val !== null) {
-            quals.push({ column: keyColNames[i], operator: "=", value: val });
-            paramMap[keyColNames[i]] = val;
-          }
-        }
+    await this.db.run(`CREATE TABLE "${table.name}" (${colDefs.join(", ")})`);
 
-        const connName = paramValues[paramValues.length - 1] as
-          | string
-          | undefined;
-
-        let connection: ConnectionConfig;
-        if (connName) {
-          const found = connections.find((c) => c.name === connName);
-          connection = found ?? {
-            name: connName,
-            plugin: pluginName,
-            config: {},
-          };
-        } else if (connections.length === 1) {
-          connection = connections[0];
-        } else {
-          connection = resolveEnvConnection(pluginName, schema) ?? {
-            name: "default",
-            plugin: pluginName,
-            config: {},
-          };
-        }
-        connection = applyEnvOverrides(connection, schema);
-
-        const ctx: QueryContext = {
-          connection,
-          quals,
-          columns: visibleColumns,
-        };
-
-        const cacheKey = engine.cache.getCacheKey(table.name, quals, visibleColumns);
-        const cached = engine.cache.get<Record<string, any>>(cacheKey);
-        if (cached) {
-          for (const row of cached) {
-            yield row;
-          }
-          return;
-        }
-
-        engine.rateLimiter.acquireSync(pluginName);
-
-        let rows: Record<string, any>[] = [];
-
-        const allKeyColumns = table.keyColumns ?? [];
-        const allKeysProvided = allKeyColumns.length > 0 && allKeyColumns.every((k) =>
-          quals.some((q) => q.column === k.name && q.operator === "="),
-        );
-
-        let usedGet = false;
-        if (table.get && allKeysProvided) {
-          const result = table.get(ctx);
-          if (result) {
-            rows = [result];
-            usedGet = true;
-          }
-        }
-        if (!usedGet) {
-          for (const row of table.list(ctx)) {
-            rows.push(row);
-          }
-        }
-
-        if (table.hydrate) {
-          for (let i = 0; i < rows.length; i++) {
-            for (const [colName, hydrateFn] of Object.entries(table.hydrate)) {
-              if (visibleColumns.includes(colName)) {
-                const extra = hydrateFn(ctx, rows[i]);
-                rows[i] = { ...rows[i], ...extra };
-              }
-            }
-          }
-        }
-
-        engine.cache.set(cacheKey, rows);
-
-        engine.rateLimiter.release(pluginName);
-
-        for (const row of rows) {
-          const out: Record<string, any> = {};
-          for (const col of visibleColumns) {
-            out[col] = row[col] ?? null;
-          }
-          yield out;
-        }
-      },
+    this.tables.set(table.name, {
+      pluginName,
+      table,
+      connections,
+      schema,
+      keyColNames,
+      allColumns: uniqueColumns,
     });
   }
 
-  query(sql: string, params?: any[]): any[] {
-    const stmt = this.db.prepare(sql);
-    if (params && params.length > 0) {
-      return stmt.all(...params);
+  private resolveConnection(
+    reg: RegisteredTable,
+    connName?: string,
+  ): ConnectionConfig {
+    const { pluginName, connections, schema } = reg;
+    let connection: ConnectionConfig;
+    if (connName) {
+      const found = connections.find((c) => c.name === connName);
+      connection = found ?? { name: connName, plugin: pluginName, config: {} };
+    } else if (connections.length === 1) {
+      connection = connections[0];
+    } else {
+      connection = resolveEnvConnection(pluginName, schema) ?? {
+        name: "default",
+        plugin: pluginName,
+        config: {},
+      };
     }
-    return stmt.all();
+    return applyEnvOverrides(connection, schema);
   }
 
-  getDatabase(): Database.Database {
+  private extractQuals(sql: string, keyColNames: string[]): Qual[] {
+    const quals: Qual[] = [];
+    for (const col of keyColNames) {
+      const patterns = [
+        new RegExp(`${col}\\s*=\\s*'([^']*)'`, "i"),
+        new RegExp(`${col}\\s*=\\s*"([^"]*)"`, "i"),
+        new RegExp(`${col}\\s*=\\s*(\\d+)`, "i"),
+      ];
+      for (const p of patterns) {
+        const m = sql.match(p);
+        if (m) {
+          quals.push({ column: col, operator: "=", value: m[1] });
+          break;
+        }
+      }
+    }
+    return quals;
+  }
+
+  private async populateTable(
+    reg: RegisteredTable,
+    quals: Qual[],
+  ): Promise<void> {
+    const { table, pluginName } = reg;
+    const visibleColumns = table.columns.map((c) => c.name);
+
+    const cacheKey = this.cache.getCacheKey(table.name, quals, visibleColumns);
+    const cached = this.cache.get<Record<string, any>>(cacheKey);
+
+    let rows: Record<string, any>[];
+
+    if (cached) {
+      rows = cached;
+    } else {
+      const connection = this.resolveConnection(reg);
+      const ctx: QueryContext = { connection, quals, columns: visibleColumns };
+
+      this.rateLimiter.acquireSync(pluginName);
+
+      rows = [];
+      const allKeyColumns = table.keyColumns ?? [];
+      const allKeysProvided =
+        allKeyColumns.length > 0 &&
+        allKeyColumns.every((k) =>
+          quals.some((q) => q.column === k.name && q.operator === "="),
+        );
+
+      let usedGet = false;
+      if (table.get && allKeysProvided) {
+        const result = table.get(ctx);
+        if (result) {
+          rows = [result];
+          usedGet = true;
+        }
+      }
+      if (!usedGet) {
+        for (const row of table.list(ctx)) {
+          rows.push(row);
+        }
+      }
+
+      if (table.hydrate) {
+        for (let i = 0; i < rows.length; i++) {
+          for (const [colName, hydrateFn] of Object.entries(table.hydrate)) {
+            if (visibleColumns.includes(colName)) {
+              const extra = hydrateFn(ctx, rows[i]);
+              rows[i] = { ...rows[i], ...extra };
+            }
+          }
+        }
+      }
+
+      this.cache.set(cacheKey, rows);
+      this.rateLimiter.release(pluginName);
+    }
+
+    await this.db.run(`DELETE FROM "${table.name}"`);
+
+    if (rows.length === 0) return;
+
+    const cols = reg.allColumns;
+    const placeholders = cols.map(() => "?").join(", ");
+    const insertSql = `INSERT INTO "${table.name}" (${cols.map((c) => `"${c}"`).join(", ")}) VALUES (${placeholders})`;
+
+    const qualMap: Record<string, any> = {};
+    for (const q of quals) {
+      qualMap[q.column] = q.value;
+    }
+
+    for (const row of rows) {
+      const values = cols.map((c) => {
+        const v = row[c] ?? qualMap[c];
+        if (v === undefined || v === null) return null;
+        if (typeof v === "object") return JSON.stringify(v);
+        return v;
+      });
+      await this.db.run(insertSql, ...values);
+    }
+  }
+
+  async query(sql: string, params?: any[]): Promise<any[]> {
+    const referencedTables: RegisteredTable[] = [];
+    for (const [name, reg] of this.tables) {
+      if (sql.includes(name)) {
+        referencedTables.push(reg);
+      }
+    }
+
+    for (const reg of referencedTables) {
+      const quals = this.extractQuals(sql, reg.keyColNames);
+      await this.populateTable(reg, quals);
+    }
+
+    let rows: Record<string, any>[];
+    if (params && params.length > 0) {
+      rows = await this.db.all(sql, ...params);
+    } else {
+      rows = await this.db.all(sql);
+    }
+
+    return rows.map(normalizeRow);
+  }
+
+  getDatabase(): Database {
     return this.db;
   }
 
-  close(): void {
-    this.db.close();
+  async close(): Promise<void> {
+    await this.db.close();
   }
 }
 
-export function createEngine(
+function toDuckType(type: string): string {
+  switch (type) {
+    case "number":
+      return "DOUBLE";
+    case "boolean":
+      return "BOOLEAN";
+    case "json":
+      return "JSON";
+    case "datetime":
+      return "VARCHAR";
+    default:
+      return "VARCHAR";
+  }
+}
+
+function normalizeRow(row: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(row)) {
+    out[k] = typeof v === "bigint" ? Number(v) : v;
+  }
+  return out;
+}
+
+export async function createEngine(
   config: DriplineConfig,
   reg: PluginRegistry,
-): QueryEngine {
+): Promise<QueryEngine> {
   const cache = new QueryCache({
     enabled: config.cache.enabled,
     ttl: config.cache.ttl,
@@ -184,6 +266,6 @@ export function createEngine(
   });
   const rl = new RateLimiter();
   const engine = new QueryEngine(reg, cache, rl);
-  engine.initialize(config);
+  await engine.initialize(config);
   return engine;
 }

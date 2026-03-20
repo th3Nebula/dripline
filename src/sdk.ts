@@ -20,12 +20,14 @@ export interface DriplineOptions {
 }
 
 export class Dripline {
-  private engine: QueryEngine;
+  private engine!: QueryEngine;
   private registry: PluginRegistry;
   private cache: QueryCache;
   private rateLimiter: RateLimiter;
+  private options: DriplineOptions;
 
-  constructor(options: DriplineOptions = {}) {
+  private constructor(options: DriplineOptions) {
+    this.options = options;
     this.registry = new PluginRegistry();
     this.cache = new QueryCache({
       enabled: options.cache?.enabled ?? true,
@@ -38,32 +40,41 @@ export class Dripline {
       const plugin = resolvePluginExport(pluginOrFn, "unknown");
       this.registry.register(plugin);
     }
+  }
 
+  static async create(options: DriplineOptions = {}): Promise<Dripline> {
+    const dl = new Dripline(options);
+    await dl.init();
+    return dl;
+  }
+
+  private async init(): Promise<void> {
     const config: DriplineConfig = {
-      connections: options.connections ?? [],
+      connections: this.options.connections ?? [],
       cache: {
-        enabled: options.cache?.enabled ?? DEFAULT_CONFIG.cache.enabled,
-        ttl: options.cache?.ttl ?? DEFAULT_CONFIG.cache.ttl,
-        maxSize: options.cache?.maxSize ?? DEFAULT_CONFIG.cache.maxSize,
+        enabled: this.options.cache?.enabled ?? DEFAULT_CONFIG.cache.enabled,
+        ttl: this.options.cache?.ttl ?? DEFAULT_CONFIG.cache.ttl,
+        maxSize: this.options.cache?.maxSize ?? DEFAULT_CONFIG.cache.maxSize,
       },
-      rateLimits: options.rateLimits ?? {},
+      rateLimits: this.options.rateLimits ?? {},
     };
 
     this.engine = new QueryEngine(this.registry, this.cache, this.rateLimiter);
-    this.engine.initialize(config);
+    await this.engine.initialize(config);
   }
 
   /** Execute a SQL query and return rows. */
-  query<T = Record<string, any>>(sql: string, params?: any[]): T[] {
-    return this.engine.query(sql, params) as T[];
+  async query<T = Record<string, any>>(sql: string, params?: any[]): Promise<T[]> {
+    return this.engine.query(sql, params) as Promise<T[]>;
   }
 
-  /** Register an additional plugin after construction. Re-initializes the engine. */
-  addPlugin(pluginOrFn: PluginDef | PluginFunction, connections?: ConnectionConfig[]): void {
+  /** Register an additional plugin. Re-initializes the engine. */
+  async addPlugin(pluginOrFn: PluginDef | PluginFunction, connections?: ConnectionConfig[]): Promise<void> {
     const plugin = resolvePluginExport(pluginOrFn, "unknown");
     this.registry.register(plugin);
+    if (this.engine) await this.engine.close();
     const config: DriplineConfig = {
-      connections: connections ?? [],
+      connections: connections ?? this.options.connections ?? [],
       cache: {
         enabled: true,
         ttl: 300,
@@ -71,9 +82,8 @@ export class Dripline {
       },
       rateLimits: {},
     };
-    this.engine.close();
     this.engine = new QueryEngine(this.registry, this.cache, this.rateLimiter);
-    this.engine.initialize(config);
+    await this.engine.initialize(config);
   }
 
   /** Get cache statistics. */
@@ -104,8 +114,8 @@ export class Dripline {
     }));
   }
 
-  /** Close the database. Call when done. */
-  close(): void {
-    this.engine.close();
+  /** Close the database. */
+  async close(): Promise<void> {
+    await this.engine.close();
   }
 }

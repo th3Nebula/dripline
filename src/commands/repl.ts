@@ -136,11 +136,11 @@ function handleMeta(line: string): boolean {
   }
 }
 
-function executeQuery(sql: string): void {
+async function executeQuery(sql: string): Promise<void> {
   try {
     const spinner = startSpinner("Querying...");
     const start = performance.now();
-    const rows = dl.query(sql);
+    const rows = await dl.query(sql);
     const elapsed = ((performance.now() - start) / 1000).toFixed(3);
     spinner.stop();
 
@@ -168,7 +168,7 @@ function executeQuery(sql: string): void {
 export async function repl(): Promise<void> {
   await loadBuiltinPlugins();
   const config = loadConfig();
-  dl = new Dripline({
+  dl = await Dripline.create({
     plugins: registry.listPlugins(),
     connections: config.connections,
     cache: config.cache,
@@ -199,7 +199,7 @@ export async function repl(): Promise<void> {
 
   rl.prompt();
 
-  rl.on("line", (line: string) => {
+  rl.on("line", async (line: string) => {
     const trimmed = line.trim();
 
     if (!trimmed) {
@@ -218,7 +218,7 @@ export async function repl(): Promise<void> {
     if (trimmed.endsWith(";")) {
       const sql = buffer.replace(/;$/, "").trim();
       if (sql) {
-        executeQuery(sql);
+        await executeQuery(sql);
         if (historyFile) {
           appendFileSync(historyFile, `${sql}\n`);
         }

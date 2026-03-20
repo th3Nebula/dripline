@@ -37,10 +37,10 @@ dripline
 
 ## How It Works
 
-Plugins define tables backed by API calls. dripline registers them as SQLite virtual tables via `better-sqlite3`. You write SQL. SQLite handles filtering, joins, aggregation. Key columns (like `owner`, `repo`) are pushed down to the API as parameters.
+Plugins define tables backed by API calls. dripline materializes API data into DuckDB and runs your SQL against it. Key columns (like `owner`, `repo`) are pushed down to the API as parameters.
 
 ```
-SQL query > SQLite virtual table > sync generator > API call > yield rows
+SQL query > DuckDB > plugin (sync generator) > API call > yield rows > materialize > query
 ```
 
 ## Commands
@@ -139,7 +139,7 @@ export default function(dl: DriplinePluginAPI) {
 }
 ```
 
-Plugins are sync generators. `list` yields rows, HTTP calls use `execFileSync("curl", ...)`. Key columns become hidden WHERE parameters pushed down to the API.
+Plugins are sync generators. `list` yields rows, HTTP calls use `execFileSync("curl", ...)`. Key columns are extracted from WHERE clauses and passed to the plugin. DuckDB handles the rest (joins, window functions, aggregation).
 
 ## SDK
 
@@ -148,16 +148,16 @@ Use dripline as a library:
 ```typescript
 import { Dripline, githubPlugin } from "dripline";
 
-const dl = new Dripline({
+const dl = await Dripline.create({
   plugins: [githubPlugin],
   connections: [{ name: "gh", plugin: "github", config: { token: "ghp_xxx" } }],
 });
 
-const repos = dl.query<{ name: string; stars: number }>(
+const repos = await dl.query<{ name: string; stars: number }>(
   "SELECT name, stargazers_count as stars FROM github_repos WHERE owner = 'torvalds' ORDER BY stars DESC LIMIT 5"
 );
 
-dl.close();
+await dl.close();
 ```
 
 ## Configuration

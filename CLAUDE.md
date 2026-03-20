@@ -17,7 +17,7 @@ npm run build
 ## Architecture
 
 ```
-SQL query > CLI/SDK > QueryEngine > SQLite virtual table > Plugin (sync generator) > API
+SQL query > CLI/SDK > QueryEngine > DuckDB > Plugin (sync generator) > API
 ```
 
 ### Layers
@@ -27,7 +27,7 @@ SQL query > CLI/SDK > QueryEngine > SQLite virtual table > Plugin (sync generato
 | SDK | `src/sdk.ts`, `src/index.ts` | `Dripline` class, library entrypoint |
 | CLI | `src/main.ts` | Commander setup, routes to commands |
 | Commands | `src/commands/` | query, repl, init, connection, plugin |
-| Engine | `src/engine.ts` | SQLite DB, virtual table registration, query execution |
+| Engine | `src/engine.ts` | DuckDB, table materialization, query execution |
 | Plugin API | `src/plugin/api.ts` | `DriplinePluginAPI` interface, `createPluginAPI()` |
 | Plugin Registry | `src/plugin/registry.ts` | Plugin/table storage and lookup |
 | Plugin Loader | `src/plugin/loader.ts` | Auto-discovery, loading from paths/dirs |
@@ -73,9 +73,9 @@ export default function(dl: DriplinePluginAPI) {
 }
 ```
 
-Plugins are sync generators. `better-sqlite3` virtual tables require synchronous execution. HTTP calls use `execFileSync("curl", ...)` via `syncGet`/`syncGetPaginated`.
+Plugins are sync generators. Data is materialized into DuckDB temp tables before query execution. HTTP calls use `execFileSync("curl", ...)` via `syncGet`/`syncGetPaginated`.
 
-Key columns become hidden `parameters` in the virtual table. Values are pushed down from WHERE clauses. Non-key WHERE clauses are filtered by SQLite after fetch.
+Key column values are extracted from WHERE clauses and passed to plugins as quals. Non-key WHERE clauses are filtered by DuckDB after materialization.
 
 ## Config
 
