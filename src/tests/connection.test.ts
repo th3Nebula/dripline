@@ -1,0 +1,200 @@
+import { describe, it, beforeEach, afterEach } from "node:test";
+import { strict as assert } from "node:assert";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { execSync } from "node:child_process";
+import {
+  findConfigDir,
+  loadConfig,
+  addConnection,
+  removeConnection,
+  getConnection,
+  resolveEnvConnection,
+} from "../config/loader.js";
+
+let origCwd: string;
+let tmpDir: string;
+let origEnv: Record<string, string | undefined>;
+
+function setup() {
+  origCwd = process.cwd();
+  tmpDir = realpathSync(mkdtempSync(join(tmpdir(), "dripline-conn-test-")));
+  process.chdir(tmpDir);
+  origEnv = { ...process.env };
+}
+
+function teardown() {
+  process.chdir(origCwd);
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith("DRIPLINE_") && !(key in origEnv)) {
+      delete process.env[key];
+    }
+  }
+  for (const [key, val] of Object.entries(origEnv)) {
+    if (key.startsWith("DRIPLINE_")) {
+      if (val === undefined) delete process.env[key];
+      else process.env[key] = val;
+    }
+  }
+}
+
+function createDriplineDir() {
+  mkdirSync(join(tmpDir, ".dripline"), { recursive: true });
+}
+
+function writeConfig(data: any) {
+  createDriplineDir();
+  writeFileSync(join(tmpDir, ".dripline", "config.json"), JSON.stringify(data, null, 2));
+}
+
+describe("connection management", () => {
+  beforeEach(() => setup());
+  afterEach(() => teardown());
+
+  it("addConnection creates .dripline/ lazily", () => {
+    addConnection({ name: "gh", plugin: "github", config: { token: "abc" } });
+    const config = loadConfig();
+    assert.equal(config.connections.length, 1);
+    assert.equal(config.connections[0].name, "gh");
+  });
+
+  it("addConnection updates existing by name", () => {
+    writeConfig({ connections: [{ name: "gh", plugin: "github", config: { token: "old" } }] });
+    addConnection({ name: "gh", plugin: "github", config: { token: "new" } });
+    const config = loadConfig();
+    assert.equal(config.connections.length, 1);
+    assert.equal(config.connections[0].config.token, "new");
+  });
+
+  it("removeConnection removes and returns true", () => {
+    writeConfig({ connections: [{ name: "gh", plugin: "github", config: {} }] });
+    assert.equal(removeConnection("gh"), true);
+    assert.equal(loadConfig().connections.length, 0);
+  });
+
+  it("removeConnection returns false for unknown", () => {
+    writeConfig({ connections: [] });
+    assert.equal(removeConnection("nope"), false);
+  });
+
+  it("getConnection returns matching connection", () => {
+    writeConfig({ connections: [{ name: "gh", plugin: "github", config: { token: "x" } }] });
+    const c = getConnection("gh");
+    assert.equal(c?.config.token, "x");
+  });
+
+  it("getConnection returns undefined for unknown", () => {
+    writeConfig({ connections: [] });
+    assert.equal(getConnection("nope"), undefined);
+  });
+});
+
+describe("env var resolution", () => {
+  beforeEach(() => setup());
+  afterEach(() => teardown());
+
+  it("resolveEnvConnection picks up DRIPLINE_<PLUGIN>_<KEY>", () => {
+    process.env.DRIPLINE_GITHUB_TOKEN = "env_token";
+    const conn = resolveEnvConnection("github");
+    assert.ok(conn);
+    assert.equal(conn!.config.token, "env_token");
+    assert.equal(conn!.plugin, "github");
+  });
+
+  it("resolveEnvConnection returns null when no matching env vars", () => {
+    assert.equal(resolveEnvConnection("nonexistent"), null);
+  });
+
+  it("resolveEnvConnection handles multiple keys", () => {
+    process.env.DRIPLINE_AWS_ACCESS_KEY = "ak";
+    process.env.DRIPLINE_AWS_SECRET_KEY = "sk";
+    const conn = resolveEnvConnection("aws");
+    assert.ok(conn);
+    assert.equal(conn!.config.access_key, "ak");
+    assert.equal(conn!.config.secret_key, "sk");
+  });
+
+  it("env vars override config values", () => {
+    writeConfig({ connections: [{ name: "gh", plugin: "github", config: { token: "from_config" } }] });
+    process.env.DRIPLINE_GITHUB_TOKEN = "from_env";
+    const conn = getConnection("gh");
+    assert.equal(conn?.config.token, "from_env");
+  });
+
+  it("config values preserved when no env override", () => {
+    writeConfig({ connections: [{ name: "gh", plugin: "github", config: { token: "original" } }] });
+    const conn = getConnection("gh");
+    assert.equal(conn?.config.token, "original");
+  });
+});
+
+const PROJECT_DIR = join(import.meta.dirname, "../..");
+const MAIN_TS = join(PROJECT_DIR, "src/main.ts");
+
+describe("connection CLI", () => {
+  beforeEach(() => setup());
+  afterEach(() => teardown());
+
+  it("connection add + list + remove", () => {
+    createDriplineDir();
+
+    execSync(`npx tsx ${MAIN_TS} connection add gh --plugin github --set token=test123`, {
+      cwd: tmpDir,
+      encoding: "utf-8",
+    });
+
+    const listOut = execSync(`npx tsx ${MAIN_TS} conn list --json`, {
+      cwd: tmpDir,
+      encoding: "utf-8",
+    });
+    const connections = JSON.parse(listOut);
+    assert.equal(connections.length, 1);
+    assert.equal(connections[0].name, "gh");
+    assert.equal(connections[0].config.token, "test123");
+
+    execSync(`npx tsx ${MAIN_TS} conn remove gh`, {
+      cwd: tmpDir,
+      encoding: "utf-8",
+    });
+
+    const listOut2 = execSync(`npx tsx ${MAIN_TS} conn list --json`, {
+      cwd: tmpDir,
+      encoding: "utf-8",
+    });
+    assert.deepEqual(JSON.parse(listOut2), []);
+  });
+
+  it("connection add with multiple --set flags", () => {
+    createDriplineDir();
+
+    execSync(`npx tsx ${MAIN_TS} connection add myaws --plugin aws --set access_key=ak --set secret_key=sk`, {
+      cwd: tmpDir,
+      encoding: "utf-8",
+    });
+
+    const listOut = execSync(`npx tsx ${MAIN_TS} conn list --json`, {
+      cwd: tmpDir,
+      encoding: "utf-8",
+    });
+    const connections = JSON.parse(listOut);
+    assert.equal(connections[0].config.access_key, "ak");
+    assert.equal(connections[0].config.secret_key, "sk");
+  });
+
+  it("connection list masks token values", () => {
+    createDriplineDir();
+
+    execSync(`npx tsx ${MAIN_TS} connection add gh --plugin github --set token=ghp_supersecrettoken`, {
+      cwd: tmpDir,
+      encoding: "utf-8",
+    });
+
+    const out = execSync(`npx tsx ${MAIN_TS} conn list`, {
+      cwd: tmpDir,
+      encoding: "utf-8",
+    });
+    assert.ok(out.includes("ghp_..."));
+    assert.ok(!out.includes("ghp_supersecrettoken"));
+  });
+});
