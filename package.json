@@ -19,6 +19,7 @@
     "dist"
   ],
   "scripts": {
+    "postinstall": "node -e \"try{require('fs').symlinkSync('..','node_modules/dripline')}catch(e){}\"",
     "build": "tsc && npm run build --workspaces --if-present",
     "prepublishOnly": "npm run build",
     "dev": "npx tsx src/main.ts",
