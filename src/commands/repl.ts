@@ -2,17 +2,16 @@ import * as readline from "node:readline";
 import { existsSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import chalk from "chalk";
-import { loadConfig } from "../config/loader.js";
+import { Dripline } from "../sdk.js";
+import { loadConfig, findConfigDir } from "../config/loader.js";
 import { loadBuiltinPlugins } from "../plugin/loader.js";
 import { registry } from "../plugin/registry.js";
-import { createEngine, type QueryEngine } from "../engine.js";
 import { formatTable } from "../utils/table-formatter.js";
 import { formatJson, formatCsv, formatLine } from "../utils/formatters.js";
-import { findConfigDir } from "../config/loader.js";
 import type { OutputFormat } from "./query.js";
 
 let outputFormat: OutputFormat = "table";
-let engine: QueryEngine;
+let dl: Dripline;
 
 function handleMeta(line: string): boolean {
   const parts = line.trim().split(/\s+/);
@@ -21,7 +20,7 @@ function handleMeta(line: string): boolean {
   switch (cmd) {
     case ".quit":
     case ".exit":
-      engine?.close();
+      dl?.close();
       process.exit(0);
 
     case ".tables": {
@@ -141,7 +140,7 @@ function handleMeta(line: string): boolean {
 function executeQuery(sql: string): void {
   try {
     const start = performance.now();
-    const rows = engine.query(sql);
+    const rows = dl.query(sql);
     const elapsed = ((performance.now() - start) / 1000).toFixed(3);
 
     switch (outputFormat) {
@@ -168,7 +167,12 @@ function executeQuery(sql: string): void {
 export async function repl(): Promise<void> {
   await loadBuiltinPlugins();
   const config = loadConfig();
-  engine = createEngine(config, registry);
+  dl = new Dripline({
+    plugins: registry.listPlugins(),
+    connections: config.connections,
+    cache: config.cache,
+    rateLimits: config.rateLimits,
+  });
 
   // Load history
   const configDir = findConfigDir();
@@ -231,7 +235,7 @@ export async function repl(): Promise<void> {
   });
 
   rl.on("close", () => {
-    engine?.close();
+    dl?.close();
     process.exit(0);
   });
 

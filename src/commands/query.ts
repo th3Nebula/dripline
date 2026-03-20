@@ -1,7 +1,7 @@
+import { Dripline } from "../sdk.js";
 import { loadConfig } from "../config/loader.js";
 import { loadBuiltinPlugins } from "../plugin/loader.js";
 import { registry } from "../plugin/registry.js";
-import { createEngine } from "../engine.js";
 import { formatTable } from "../utils/table-formatter.js";
 import { formatJson, formatCsv, formatLine } from "../utils/formatters.js";
 import { error } from "../utils/output.js";
@@ -15,11 +15,16 @@ export async function query(
   await loadBuiltinPlugins();
 
   const config = loadConfig();
-  const engine = createEngine(config, registry);
+  const dl = new Dripline({
+    plugins: registry.listPlugins(),
+    connections: config.connections,
+    cache: config.cache,
+    rateLimits: config.rateLimits,
+  });
 
   try {
     const start = performance.now();
-    const rows = engine.query(sql);
+    const rows = dl.query(sql);
     const elapsed = ((performance.now() - start) / 1000).toFixed(3);
 
     const format = options.json ? "json" : options.output ?? "table";
@@ -46,6 +51,6 @@ export async function query(
     error(e.message);
     process.exit(1);
   } finally {
-    engine.close();
+    dl.close();
   }
 }

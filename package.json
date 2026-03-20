@@ -3,7 +3,12 @@
   "version": "0.1.0",
   "description": "Query cloud APIs using SQL",
   "type": "module",
-  "main": "dist/main.js",
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./plugins/github": "./dist/plugins/github.js",
+    "./plugins/utils/http": "./dist/plugins/utils/http.js"
+  },
   "bin": {
     "dripline": "./dist/main.js"
   },
