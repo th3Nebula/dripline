@@ -12,6 +12,7 @@ export default function github(dl: DriplinePluginAPI) {
       type: "string",
       required: false,
       description: "GitHub personal access token",
+      env: "GITHUB_TOKEN",
     },
   });
 

@@ -11,6 +11,7 @@ import {
   removeConnection,
   getConnection,
   resolveEnvConnection,
+  applyEnvOverrides,
 } from "../config/loader.js";
 
 let origCwd: string;
@@ -94,38 +95,62 @@ describe("env var resolution", () => {
   beforeEach(() => setup());
   afterEach(() => teardown());
 
-  it("resolveEnvConnection picks up DRIPLINE_<PLUGIN>_<KEY>", () => {
-    process.env.DRIPLINE_GITHUB_TOKEN = "env_token";
-    const conn = resolveEnvConnection("github");
+  const ghSchema = { token: { env: "GITHUB_TOKEN" } };
+  const awsSchema = {
+    access_key: { env: "AWS_ACCESS_KEY_ID" },
+    secret_key: { env: "AWS_SECRET_ACCESS_KEY" },
+  };
+
+  it("resolveEnvConnection picks up env var from schema", () => {
+    process.env.GITHUB_TOKEN = "env_token";
+    const conn = resolveEnvConnection("github", ghSchema);
     assert.ok(conn);
     assert.equal(conn!.config.token, "env_token");
     assert.equal(conn!.plugin, "github");
+    delete process.env.GITHUB_TOKEN;
+  });
+
+  it("resolveEnvConnection returns null when no schema", () => {
+    assert.equal(resolveEnvConnection("github"), null);
   });
 
   it("resolveEnvConnection returns null when no matching env vars", () => {
-    assert.equal(resolveEnvConnection("nonexistent"), null);
+    assert.equal(resolveEnvConnection("github", ghSchema), null);
   });
 
   it("resolveEnvConnection handles multiple keys", () => {
-    process.env.DRIPLINE_AWS_ACCESS_KEY = "ak";
-    process.env.DRIPLINE_AWS_SECRET_KEY = "sk";
-    const conn = resolveEnvConnection("aws");
+    process.env.AWS_ACCESS_KEY_ID = "ak";
+    process.env.AWS_SECRET_ACCESS_KEY = "sk";
+    const conn = resolveEnvConnection("aws", awsSchema);
     assert.ok(conn);
     assert.equal(conn!.config.access_key, "ak");
     assert.equal(conn!.config.secret_key, "sk");
+    delete process.env.AWS_ACCESS_KEY_ID;
+    delete process.env.AWS_SECRET_ACCESS_KEY;
   });
 
-  it("env vars override config values", () => {
-    writeConfig({ connections: [{ name: "gh", plugin: "github", config: { token: "from_config" } }] });
-    process.env.DRIPLINE_GITHUB_TOKEN = "from_env";
-    const conn = getConnection("gh");
-    assert.equal(conn?.config.token, "from_env");
+  it("applyEnvOverrides overrides config values", () => {
+    process.env.GITHUB_TOKEN = "from_env";
+    const conn = applyEnvOverrides(
+      { name: "gh", plugin: "github", config: { token: "from_config" } },
+      ghSchema,
+    );
+    assert.equal(conn.config.token, "from_env");
+    delete process.env.GITHUB_TOKEN;
   });
 
-  it("config values preserved when no env override", () => {
-    writeConfig({ connections: [{ name: "gh", plugin: "github", config: { token: "original" } }] });
-    const conn = getConnection("gh");
-    assert.equal(conn?.config.token, "original");
+  it("applyEnvOverrides preserves config when no env var set", () => {
+    const conn = applyEnvOverrides(
+      { name: "gh", plugin: "github", config: { token: "original" } },
+      ghSchema,
+    );
+    assert.equal(conn.config.token, "original");
+  });
+
+  it("applyEnvOverrides with no schema returns conn unchanged", () => {
+    const orig = { name: "gh", plugin: "github", config: { token: "x" } };
+    const conn = applyEnvOverrides(orig);
+    assert.equal(conn.config.token, "x");
   });
 });
 

@@ -29,7 +29,7 @@ dripline connection add gh --plugin github --set token=ghp_xxx
 Or use environment variables (no config needed):
 
 ```bash
-export DRIPLINE_GITHUB_TOKEN=ghp_xxx
+export GITHUB_TOKEN=ghp_xxx
 ```
 
 Start the interactive shell:
@@ -173,7 +173,7 @@ dripline connection list
 dripline connection remove gh
 ```
 
-Env vars override config — `DRIPLINE_<PLUGIN>_<KEY>` (e.g. `DRIPLINE_GITHUB_TOKEN`).
+Env vars override config. Each plugin declares its own env var names (e.g. `GITHUB_TOKEN`).
 
 Full config format:
 

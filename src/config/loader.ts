@@ -53,19 +53,19 @@ export function saveConfig(config: DriplineConfig): void {
 
 export function getConnection(name: string): ConnectionConfig | undefined {
   const config = loadConfig();
-  const conn = config.connections.find((c) => c.name === name);
-  if (conn) return applyEnvOverrides(conn);
-  return conn;
+  return config.connections.find((c) => c.name === name);
 }
 
-export function resolveEnvConnection(plugin: string): ConnectionConfig | null {
-  const prefix = `DRIPLINE_${plugin.toUpperCase()}_`;
+export function resolveEnvConnection(
+  plugin: string,
+  schema?: Record<string, { env?: string }>,
+): ConnectionConfig | null {
+  if (!schema) return null;
   const envConfig: Record<string, any> = {};
 
-  for (const [key, val] of Object.entries(process.env)) {
-    if (key.startsWith(prefix) && val) {
-      const field = key.slice(prefix.length).toLowerCase();
-      envConfig[field] = val;
+  for (const [field, def] of Object.entries(schema)) {
+    if (def.env && process.env[def.env]) {
+      envConfig[field] = process.env[def.env];
     }
   }
 
@@ -73,14 +73,16 @@ export function resolveEnvConnection(plugin: string): ConnectionConfig | null {
   return { name: `${plugin}_env`, plugin, config: envConfig };
 }
 
-function applyEnvOverrides(conn: ConnectionConfig): ConnectionConfig {
-  const prefix = `DRIPLINE_${conn.plugin.toUpperCase()}_`;
+export function applyEnvOverrides(
+  conn: ConnectionConfig,
+  schema?: Record<string, { env?: string }>,
+): ConnectionConfig {
+  if (!schema) return conn;
   const merged = { ...conn.config };
 
-  for (const [key, val] of Object.entries(process.env)) {
-    if (key.startsWith(prefix) && val) {
-      const field = key.slice(prefix.length).toLowerCase();
-      merged[field] = val;
+  for (const [field, def] of Object.entries(schema)) {
+    if (def.env && process.env[def.env]) {
+      merged[field] = process.env[def.env];
     }
   }
 

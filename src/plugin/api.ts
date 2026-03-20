@@ -13,6 +13,7 @@ export interface SchemaField {
   required?: boolean;
   description?: string;
   default?: any;
+  env?: string;
 }
 
 export interface TableDefinition {
@@ -62,12 +63,7 @@ export function createPluginAPI(pluginId: string): {
     setConnectionSchema(schema: Record<string, SchemaField>) {
       connectionConfigSchema = {};
       for (const [key, field] of Object.entries(schema)) {
-        connectionConfigSchema[key] = {
-          type: field.type,
-          required: field.required,
-          description: field.description,
-          default: field.default,
-        };
+        connectionConfigSchema[key] = { ...field };
       }
     },
     onInit(fn) {

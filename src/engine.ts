@@ -9,7 +9,7 @@ import type {
   QueryContext,
   Qual,
 } from "./plugin/types.js";
-import { resolveEnvConnection } from "./config/loader.js";
+import { resolveEnvConnection, applyEnvOverrides } from "./config/loader.js";
 
 export class QueryEngine {
   private db: Database.Database;
@@ -35,7 +35,8 @@ export class QueryEngine {
 
     for (const { plugin, table } of this.registry.getAllTables()) {
       const connections = config.connections.filter((c) => c.plugin === plugin);
-      this.registerTable(plugin, table, connections);
+      const pluginDef = this.registry.getPlugin(plugin);
+      this.registerTable(plugin, table, connections, pluginDef?.connectionConfigSchema);
     }
   }
 
@@ -43,6 +44,7 @@ export class QueryEngine {
     pluginName: string,
     table: TableDef,
     connections: ConnectionConfig[],
+    schema?: Record<string, { env?: string }>,
   ): void {
     const engine = this;
 
@@ -82,12 +84,13 @@ export class QueryEngine {
         } else if (connections.length === 1) {
           connection = connections[0];
         } else {
-          connection = resolveEnvConnection(pluginName) ?? {
+          connection = resolveEnvConnection(pluginName, schema) ?? {
             name: "default",
             plugin: pluginName,
             config: {},
           };
         }
+        connection = applyEnvOverrides(connection, schema);
 
         const ctx: QueryContext = {
           connection,

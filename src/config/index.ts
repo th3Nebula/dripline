@@ -7,4 +7,5 @@ export {
   addConnection,
   removeConnection,
   resolveEnvConnection,
+  applyEnvOverrides,
 } from "./loader.js";
