@@ -52,7 +52,7 @@ SQL query → SQLite virtual table → sync generator → API call → yield row
 dripline                              # Interactive REPL
 dripline query "<sql>"                # Execute a query (alias: dripline q)
 dripline init                         # Create .dripline/ directory
-dripline connection add <name>        # Add a connection (--plugin, --set key=val)
+dripline connection add <name>        # Add a connection (--plugin, --prompt, --stdin)
 dripline connection list              # List connections
 dripline connection remove <name>     # Remove a connection
 dripline plugin list                  # List all plugins
@@ -112,12 +112,13 @@ Plugins auto-discover from `.dripline/plugins/` (project) and `~/.dripline/plugi
 
 ```typescript
 import type { DriplinePluginAPI } from "dripline";
+import { syncGetPaginated } from "dripline";
 
 export default function(dl: DriplinePluginAPI) {
   dl.setName("my-api");
   dl.setVersion("1.0.0");
   dl.setConnectionSchema({
-    token: { type: "string", required: true, description: "API token" },
+    token: { type: "string", required: true, description: "API token", env: "MY_API_TOKEN" },
   });
 
   dl.registerTable("my_items", {

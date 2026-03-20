@@ -1,93 +1,64 @@
 # dripline
 
-Query APIs using SQL. One drip at a time.
+Query APIs using SQL.
 
 ## Commands
 
 ```bash
-npm run dev -- query "SELECT 1"   # Run a query in dev mode
-npm run dev -- repl               # Start interactive REPL
-npm run dev -- --help             # Show help
-npm test                          # Run tests
-npm run format                    # Format with Biome
-npm run lint                      # Lint with Biome
-npm run build                     # Compile TypeScript (for npm)
+npm run dev -- query "SELECT 1"
+npm run dev -- repl
+npm run dev -- --help
+npm test
+npm run format
+npm run lint
+npm run build
 ```
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  User: dripline query "SELECT * FROM github_repos   │
-│         WHERE owner = 'torvalds'"                   │
-└──────────────┬──────────────────────────────────────┘
-               │
-       ┌───────▼────────┐
-       │  CLI (Commander)│  src/main.ts
-       └───────┬─────────┘
-               │
-       ┌───────▼──────────────┐
-       │  Query Engine         │  src/engine.ts
-       │  (better-sqlite3)     │
-       │  ┌─────────────────┐  │
-       │  │ Virtual Tables  │  │  db.table() registers plugins
-       │  └────────┬────────┘  │
-       │  ┌────────▼────────┐  │
-       │  │ Cache + Rate    │  │  src/cache.ts, src/rate-limiter.ts
-       │  │ Limiter         │  │
-       │  └────────┬────────┘  │
-       └───────────┼───────────┘
-               │
-       ┌───────▼──────────────┐
-       │  Plugin (sync gen)    │  src/plugins/github.ts
-       │  list(ctx) → yield {} │
-       └───────┬──────────────┘
-               │ execSync curl
-       ┌───────▼──────────────┐
-       │  Cloud API            │
-       └──────────────────────┘
+SQL query → CLI/SDK → QueryEngine → SQLite virtual table → Plugin (sync generator) → API
 ```
-
-### Key Design Decision: Sync Generators
-
-better-sqlite3's virtual table API requires **sync** generators. Plugins use `execFileSync("curl", ...)` for HTTP calls. This is intentional — SQLite drives the execution synchronously.
 
 ### Layers
 
 | Layer | File | Purpose |
 |-------|------|---------|
+| SDK | `src/sdk.ts`, `src/index.ts` | `Dripline` class, library entrypoint |
 | CLI | `src/main.ts` | Commander setup, routes to commands |
 | Commands | `src/commands/` | query, repl, init, connection, plugin |
-| Engine | `src/engine.ts` | Creates SQLite DB, registers virtual tables, runs queries |
-| Plugin SDK | `src/plugin/` | Types, registry, loader |
-| Plugins | `src/plugins/` | GitHub (and future plugins) |
-| Config | `src/config/` | Connection config, .dripline/config.json |
-| Cache | `src/cache.ts` | In-memory query result cache |
+| Engine | `src/engine.ts` | SQLite DB, virtual table registration, query execution |
+| Plugin API | `src/plugin/api.ts` | `DriplinePluginAPI` interface, `createPluginAPI()` |
+| Plugin Registry | `src/plugin/registry.ts` | Plugin/table storage and lookup |
+| Plugin Loader | `src/plugin/loader.ts` | Auto-discovery, loading from paths/dirs |
+| Plugin Installer | `src/plugin/installer.ts` | npm/git/local install, `plugins.json` |
+| Plugins | `src/plugins/` | GitHub plugin |
+| Config | `src/config/` | `.dripline/config.json`, env var resolution |
+| Cache | `src/cache.ts` | In-memory query result cache with TTL |
 | Rate Limiter | `src/rate-limiter.ts` | Token bucket per-scope |
-| Formatters | `src/utils/` | Table, JSON, CSV, line output |
+| HTTP | `src/plugins/utils/http.ts` | `syncGet`, `syncGetPaginated` (curl-based) |
+| Formatters | `src/utils/` | Table, JSON, CSV, line output, spinner |
 
-## Plugin SDK
-
-### Creating a Plugin
+## Writing a Plugin
 
 ```typescript
-import type { PluginDef } from "../plugin/types.js";
-import { syncGetPaginated } from "./utils/http.js";
+import type { DriplinePluginAPI } from "dripline";
+import { syncGetPaginated } from "dripline";
 
-const myPlugin: PluginDef = {
-  name: "myplugin",
-  version: "0.1.0",
-  connectionConfigSchema: {
-    api_key: { type: "string", required: true, description: "API key" },
-  },
-  tables: [{
-    name: "my_table",
+export default function(dl: DriplinePluginAPI) {
+  dl.setName("myplugin");
+  dl.setVersion("1.0.0");
+  dl.setConnectionSchema({
+    api_key: { type: "string", required: true, env: "MY_API_KEY" },
+  });
+
+  dl.registerTable("my_table", {
     columns: [
       { name: "id", type: "number" },
       { name: "name", type: "string" },
     ],
     keyColumns: [
-      { name: "org", required: "required", operators: ["="] },
+      { name: "org", required: "required" },
     ],
     *list(ctx) {
       const org = ctx.quals.find(q => q.column === "org")?.value;
@@ -98,30 +69,13 @@ const myPlugin: PluginDef = {
         yield { id: item.id, name: item.name };
       }
     },
-    get(ctx) {
-      // Optional: single-item lookup when all key cols provided
-      return null;
-    },
-  }],
-};
-
-export default myPlugin;
+  });
+}
 ```
 
-### Key Types
+Plugins are sync generators. `better-sqlite3` virtual tables require synchronous execution — HTTP calls use `execFileSync("curl", ...)` via `syncGet`/`syncGetPaginated`.
 
-- `ColumnDef` — `{ name, type: 'string'|'number'|'boolean'|'json'|'datetime' }`
-- `KeyColumn` — `{ name, required: 'required'|'optional', operators: ['='] }` — becomes a hidden WHERE parameter
-- `ListFunc` — sync generator: `(ctx: QueryContext) => Generator<Record<string, any>>`
-- `GetFunc` — sync: `(ctx: QueryContext) => Record<string, any> | null`
-- `QueryContext` — `{ connection, quals, columns, limit? }`
-
-### How Virtual Tables Work
-
-1. Engine registers each plugin table via `db.table(name, { columns, parameters, *rows(...) })`
-2. Key columns become `parameters` — values are pushed down from WHERE clauses
-3. Non-key WHERE clauses are filtered by SQLite after data is fetched
-4. The `*rows()` generator: checks cache → rate limit → get/list → hydrate → cache → yield
+Key columns become hidden `parameters` in the virtual table. Values are pushed down from WHERE clauses. Non-key WHERE clauses are filtered by SQLite after fetch.
 
 ## Config
 
@@ -129,29 +83,31 @@ export default myPlugin;
 ```json
 {
   "connections": [
-    { "name": "my_github", "plugin": "github", "config": { "token": "ghp_xxx" } }
+    { "name": "gh", "plugin": "github", "config": { "token": "ghp_xxx" } }
   ],
   "cache": { "enabled": true, "ttl": 300, "maxSize": 1000 },
   "rateLimits": { "github": { "maxPerSecond": 5 } }
 }
 ```
 
+Env vars override config. Plugins declare env var names in `connectionConfigSchema` via the `env` field (e.g. `GITHUB_TOKEN`).
+
 ## Adding a New Plugin
 
 1. Create `src/plugins/<name>.ts`
-2. Define tables with columns, key columns, list/get generators
-3. Default export the `PluginDef`
-4. It auto-loads via `loadBuiltinPlugins()`
+2. Export a default function that receives `DriplinePluginAPI`
+3. Call `dl.setName()`, `dl.registerTable()`, etc.
+4. Auto-loads via `loadBuiltinPlugins()`
 
 ## Adding a New Command
 
 1. Create `src/commands/<name>.ts`
 2. Export an async function
-3. Import and register in `src/main.ts` with Commander
+3. Import and register in `src/main.ts`
 
 ## Exit Codes
 
 - `0` — success
 - `1` — error
-- `2` — user error (bad input)
-- `3` — not found (.dripline/ missing)
+- `2` — user error
+- `3` — not found
