@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install
+      - run: npm install --legacy-peer-deps
       - run: npm install -g tsx
       - run: npm run build
       - name: Run tests
@@ -43,7 +43,7 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
-      - run: npm install
+      - run: npm install --legacy-peer-deps
       - name: Build
         run: npm run build
       - name: Publish to npm
