@@ -20,15 +20,12 @@ dripline query "SELECT name, stargazers_count, language
   LIMIT 10"
 ```
 
-Add auth for higher rate limits:
+Authenticate (GitHub allows 60 requests/hour without a token):
 
 ```bash
 dripline connection add gh --plugin github --set token=ghp_xxx
-```
 
-Or use environment variables (no config needed):
-
-```bash
+# or via environment variable
 export GITHUB_TOKEN=ghp_xxx
 ```
 
