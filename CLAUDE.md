@@ -1,6 +1,6 @@
 # dripline
 
-Query cloud APIs using SQL. One drip at a time.
+Query APIs using SQL. One drip at a time.
 
 ## Commands
 

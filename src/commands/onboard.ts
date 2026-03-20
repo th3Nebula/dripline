@@ -5,7 +5,7 @@ import { output, success } from "../utils/output.js";
 
 const INSTRUCTIONS = `
 <dripline>
-Use \`dripline\` to query cloud APIs using SQL. Config lives in \`.dripline/config.json\`.
+Use \`dripline\` to query APIs using SQL. Config lives in \`.dripline/config.json\`.
 
 <commands>
 - \`dripline query "<sql>"\` - Run a SQL query (alias: \`dripline q\`)

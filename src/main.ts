@@ -15,7 +15,7 @@ const program = new Command();
 
 program
   .name("dripline")
-  .description("Query cloud APIs using SQL")
+  .description("Query APIs using SQL")
   .version(`dripline ${version}`, "-v, --version")
   .option("--json", "Output as JSON")
   .option("-q, --quiet", "Suppress output");

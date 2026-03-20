@@ -1,7 +1,7 @@
 {
   "name": "dripline",
   "version": "0.1.0",
-  "description": "Query cloud APIs using SQL",
+  "description": "Query APIs using SQL",
   "type": "module",
   "main": "dist/index.js",
   "exports": {
