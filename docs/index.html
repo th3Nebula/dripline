@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>dripline — plugin catalog</title>
+<title>dripline — extension catalog</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💧</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -382,7 +382,7 @@ footer a:hover { text-decoration: underline; }
   <h1 class="brand">dripline<span class="drop">💧</span></h1>
   <p class="tagline">query mode for agents</p>
   <div class="stats">
-    <div><div class="stat-n" id="sn-p">0</div><div class="stat-l">plugins</div></div>
+    <div><div class="stat-n" id="sn-p">0</div><div class="stat-l">extensions</div></div>
     <div><div class="stat-n" id="sn-t">0</div><div class="stat-l">tables</div></div>
   </div>
   <div class="hero-cta">
@@ -395,7 +395,7 @@ footer a:hover { text-decoration: underline; }
 
 <section class="catalog">
   <div class="search-wrap">
-    <input class="search" type="text" placeholder="search plugins, tables, columns..." id="q" autocomplete="off" spellcheck="false">
+    <input class="search" type="text" placeholder="search extensions, tables, columns..." id="q" autocomplete="off" spellcheck="false">
     <div class="search-meta" id="meta"></div>
   </div>
   <div class="grid" id="grid"></div>
@@ -464,7 +464,7 @@ function copyFlash(el, text) {
       c.style.display=ok?'':'none';
       if(ok)n++;
     });
-    meta.textContent=v?`${n} plugin${n!==1?'s':''} match "${qEl.value}"`:'press / to search';
+    meta.textContent=v?`${n} extension${n!==1?'s':''} match "${qEl.value}"`:'press / to search';
   }
   filter();
   qEl.addEventListener('input',filter);
