@@ -8,7 +8,34 @@ import { registry } from "./registry.js";
 import type { PluginDef } from "./types.js";
 
 export async function loadPluginFromPath(path: string): Promise<PluginDef> {
-  const absPath = resolve(path);
+  let absPath = resolve(path);
+
+  // If it's a directory, find the entry point
+  if (existsSync(absPath) && statSync(absPath).isDirectory()) {
+    const candidates = [
+      join(absPath, "src", "index.ts"),
+      join(absPath, "src", "index.js"),
+      join(absPath, "index.ts"),
+      join(absPath, "index.js"),
+    ];
+
+    // Check package.json main field
+    const pkgPath = join(absPath, "package.json");
+    if (existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+        if (pkg.main) candidates.unshift(join(absPath, pkg.main));
+      } catch {}
+    }
+
+    const found = candidates.find((c) => existsSync(c));
+    if (found) {
+      absPath = found;
+    } else {
+      throw new Error(`No entry point found in ${absPath}`);
+    }
+  }
+
   const mod = await import(pathToFileURL(absPath).href);
   const pluginId = absPath.replace(/.*\//, "").replace(/\.(ts|js)$/, "");
   return resolvePluginExport(mod.default, pluginId);

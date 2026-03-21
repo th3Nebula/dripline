@@ -1,12 +1,12 @@
 1/ if there's code mode, there's also query mode.
 
-introducing dripline — turns any api, cli, or cloud service into a sql table. install a plugin, write a query, get rows back. joins, aggregations, window functions — duckdb handles the rest.
+introducing dripline, turns any api, cli, or cloud service into a sql table. install a plugin, agent writes a query, get rows back. joins, aggregations, window functions and duckdb handles the rest.
 
-13 plugins, 57 tables. github, docker, brew, kubectl, cloudflare, vercel, and more.
+ultra easy to extend, in the repo - 13 plugins, 61 tables. github, docker, pi, brew, kubectl, cloudflare, vercel, and more.
 
 obligatory @mariozechner pi extension that injects all available tables into your agent's context so it knows what it can query:
 
-pi install git:github.com/Michaelliv/dripline
+pi install npm:dripline
 
 💧🧵
 
