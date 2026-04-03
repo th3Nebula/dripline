@@ -1,11 +1,6 @@
 {
   "plugins": [
     {
-      "source": "./plugins/docker/src/index.ts",
-      "path": "/Users/michaelliv/Projects/dripline/plugins/docker/src/index.ts",
-      "name": "index"
-    },
-    {
       "source": "./plugins/github/src/index.ts",
       "path": "/Users/michaelliv/Projects/dripline/plugins/github/src/index.ts",
       "name": "index"
@@ -261,11 +256,6 @@
       "name": "index"
     },
     {
-      "source": "./plugins/mongodbatlas/src/index.ts",
-      "path": "/Users/michaelliv/Projects/dripline/plugins/mongodbatlas/src/index.ts",
-      "name": "index"
-    },
-    {
       "source": "./plugins/azuredevops/src/index.ts",
       "path": "/Users/michaelliv/Projects/dripline/plugins/azuredevops/src/index.ts",
       "name": "index"
@@ -273,6 +263,16 @@
     {
       "source": "./plugins/svgl/src/index.ts",
       "path": "/Users/michaelliv/Projects/dripline/plugins/svgl/src/index.ts",
+      "name": "index"
+    },
+    {
+      "source": "./plugins/mongodb",
+      "path": "/Users/michaelliv/Projects/dripline/plugins/mongodb",
+      "name": "mongodb"
+    },
+    {
+      "source": "./plugins/mongodb/src/index.ts",
+      "path": "/Users/michaelliv/Projects/dripline/plugins/mongodb/src/index.ts",
       "name": "index"
     }
   ]

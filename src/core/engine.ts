@@ -1,8 +1,10 @@
 import { Database } from "duckdb-async";
+import * as arrow from "apache-arrow";
 import { applyEnvOverrides, resolveEnvConnection } from "../config/loader.js";
 import type { DriplineConfig } from "../config/types.js";
 import type { PluginRegistry } from "../plugin/registry.js";
 import type {
+  ColumnType,
   ConnectionConfig,
   Qual,
   QueryContext,
@@ -39,6 +41,7 @@ export class QueryEngine {
 
   async initialize(config: DriplineConfig): Promise<void> {
     this.db = await Database.create(":memory:");
+    await this.db.exec("INSTALL arrow FROM community; LOAD arrow;");
 
     for (const [scope, rl] of Object.entries(config.rateLimits)) {
       this.rateLimiter.configure(scope, rl);
@@ -181,28 +184,40 @@ export class QueryEngine {
       this.rateLimiter.release(pluginName);
     }
 
+    await this.ingestViaArrow(reg, table, rows, quals);
+  }
+
+  private async ingestViaArrow(
+    reg: RegisteredTable,
+    table: TableDef,
+    rows: Record<string, any>[],
+    quals: Qual[],
+  ): Promise<void> {
     await this.db.run(`DELETE FROM "${table.name}"`);
 
     if (rows.length === 0) return;
 
-    const cols = reg.allColumns;
-    const placeholders = cols.map(() => "?").join(", ");
-    const insertSql = `INSERT INTO "${table.name}" (${cols.map((c) => `"${c}"`).join(", ")}) VALUES (${placeholders})`;
+    const colTypes = new Map(table.columns.map((c) => [c.name, c.type]));
+    const qualMap = Object.fromEntries(quals.map((q) => [q.column, q.value]));
 
-    const qualMap: Record<string, any> = {};
-    for (const q of quals) {
-      qualMap[q.column] = q.value;
-    }
-
-    for (const row of rows) {
-      const values = cols.map((c) => {
-        const v = row[c] ?? qualMap[c];
-        if (v === undefined || v === null) return null;
-        if (typeof v === "object") return JSON.stringify(v);
-        return v;
+    const arrowCols: Record<string, arrow.Vector> = {};
+    for (const col of reg.allColumns) {
+      const values = rows.map((row) => {
+        const v = row[col] ?? qualMap[col];
+        if (v == null) return null;
+        return typeof v === "object" ? JSON.stringify(v) : v;
       });
-      await this.db.run(insertSql, ...values);
+      arrowCols[col] = arrow.vectorFromArray(
+        values,
+        toArrowType(colTypes.get(col) ?? "string"),
+      );
     }
+
+    const ipc = arrow.tableToIPC(new arrow.Table(arrowCols), "stream");
+    const buf = `_dripline_buf_${table.name}`;
+    await this.db.register_buffer(buf, [ipc], true);
+    await this.db.run(`INSERT INTO "${table.name}" SELECT * FROM ${buf}`);
+    await this.db.unregister_buffer(buf);
   }
 
   async query(sql: string, params?: any[]): Promise<any[]> {
@@ -234,6 +249,20 @@ export class QueryEngine {
 
   async close(): Promise<void> {
     await this.db.close();
+  }
+}
+
+function toArrowType(type: ColumnType): arrow.DataType {
+  switch (type) {
+    case "number":
+      return new arrow.Float64();
+    case "boolean":
+      return new arrow.Bool();
+    case "json":
+    case "datetime":
+    case "string":
+    default:
+      return new arrow.Utf8();
   }
 }
 

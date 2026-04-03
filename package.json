@@ -19,7 +19,6 @@
     "dist"
   ],
   "scripts": {
-
     "build": "tsc && npm run build --workspaces --if-present",
     "prepublishOnly": "npm run build",
     "dev": "npx tsx src/main.ts",
@@ -38,7 +37,9 @@
     "url": "https://github.com/Michaelliv/dripline/issues"
   },
   "pi": {
-    "extensions": [".pi/extensions/pi-dripline-context/index.ts"]
+    "extensions": [
+      ".pi/extensions/pi-dripline-context/index.ts"
+    ]
   },
   "keywords": [
     "pi-package",
@@ -57,6 +58,7 @@
     "typescript": "^5.8.0"
   },
   "dependencies": {
+    "apache-arrow": "^21.1.0",
     "chalk": "^5.6.2",
     "commander": "^14.0.3",
     "duckdb": "^1.4.4",
