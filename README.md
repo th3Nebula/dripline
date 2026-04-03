@@ -79,30 +79,64 @@ WHERE prompt = 'generate 5 fictional engineers with name, age, city';
 
 ## Writing a Plugin
 
-Plugins are sync generators. Wrap an API with `syncGet` or a local CLI with `syncExec`:
+Plugins are sync generators. Wrap an API with `syncGet`/`syncGetPaginated` or a local CLI with `syncExec`.
 
 ```typescript
 import type { DriplinePluginAPI } from "dripline";
-import { syncExec } from "dripline";
+import { syncGetPaginated } from "dripline";
 
 export default function(dl: DriplinePluginAPI) {
-  dl.setName("my-cli");
+  dl.setName("orders");
   dl.setVersion("1.0.0");
 
-  dl.registerTable("my_things", {
+  // Declare connection config — env vars override config.json values
+  dl.setConnectionSchema({
+    api_key: { type: "string", required: true, env: "ORDERS_API_KEY" },
+  });
+
+  dl.registerTable("orders", {
     columns: [
-      { name: "name", type: "string" },
-      { name: "status", type: "string" },
+      { name: "id", type: "number" },
+      { name: "customer", type: "string" },
+      { name: "total", type: "number" },
+      { name: "created_date", type: "datetime" },
     ],
-    *list() {
-      const { rows } = syncExec("mytool", ["list", "--json"], { parser: "json" });
-      for (const r of rows) yield { name: r.name, status: r.status };
+
+    // Key columns are extracted from WHERE clauses and passed to list() as quals.
+    // This is how plugins filter at the source instead of fetching everything.
+    //
+    //   required  — query MUST include this in WHERE or list() won't be called
+    //   optional  — passed to list() if present, ignored if not
+    //   any_of    — at least one column in the any_of group must be present
+    //
+    // Rule of thumb: if the underlying API/CLI accepts a filter parameter,
+    // declare it as a key column so the engine can push it down.
+    keyColumns: [
+      { name: "org_id", required: "required" },
+      { name: "created_date", required: "optional" },
+    ],
+
+    *list(ctx) {
+      const orgId = ctx.quals.find(q => q.column === "org_id")?.value;
+      const date = ctx.quals.find(q => q.column === "created_date")?.value;
+
+      // Build API URL with filters pushed down from SQL
+      let url = `https://api.example.com/orgs/${orgId}/orders`;
+      if (date) url += `?created=${date}`;
+
+      const headers = { Authorization: `Bearer ${ctx.connection.config.api_key}` };
+      const data = syncGetPaginated(url, headers);
+      for (const d of data) {
+        yield { id: d.id, customer: d.customer, total: d.total, created_date: d.created_at };
+      }
     },
   });
 }
 ```
 
-Key columns go in `keyColumns` and are extracted from WHERE clauses automatically. `syncExec` supports parsers: `json`, `jsonlines`, `csv`, `tsv`, `lines`, `kv`, `raw`.
+**How key columns work:** when you query `SELECT * FROM orders WHERE org_id = 'acme' AND created_date = '2026-03-01'`, the engine extracts both quals and passes them to `list()` via `ctx.quals`. The plugin uses them to filter at the source — fetching only matching rows instead of everything. Columns NOT in `keyColumns` are filtered by DuckDB after all rows are materialized. For large tables, declaring filter-friendly columns as optional key columns is the difference between milliseconds and timeouts.
+
+`syncExec` supports parsers: `json`, `jsonlines`, `csv`, `tsv`, `lines`, `kv`, `raw`.
 
 See [plugins/](plugins/) for full examples.
 
