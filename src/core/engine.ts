@@ -108,6 +108,59 @@ export class QueryEngine {
     return applyEnvOverrides(connection, schema);
   }
 
+  private async parseAst(sql: string): Promise<any> {
+    const escaped = sql.replace(/'/g, "''");
+    const result = await this.db.all(
+      `SELECT json_serialize_sql('${escaped}') as ast`,
+    );
+    return JSON.parse(result[0].ast);
+  }
+
+  private extractQualsForTable(
+    ast: any,
+    tableName: string,
+    keyColNames: string[],
+  ): Qual[] {
+    const keySet = new Set(keyColNames);
+    const quals: Qual[] = [];
+
+    // Find all SELECT nodes that reference the target table and collect their WHERE quals
+    const findSelects = (node: any): void => {
+      if (!node || typeof node !== "object") return;
+
+      if (node.type === "SELECT_NODE") {
+        const referencesTable = this.selectReferencesTable(node, tableName);
+        if (referencesTable && node.where_clause) {
+          this.walkWhere(node.where_clause, keySet, quals);
+        }
+      }
+
+      // Recurse into all object/array values to find nested SELECTs (subqueries, CTEs)
+      for (const val of Object.values(node)) {
+        if (Array.isArray(val)) {
+          for (const item of val) findSelects(item);
+        } else if (val && typeof val === "object") {
+          findSelects(val);
+        }
+      }
+    };
+
+    if (!ast.error && ast.statements?.[0]?.node) {
+      findSelects(ast.statements[0].node);
+    }
+    return quals;
+  }
+
+  private selectReferencesTable(selectNode: any, tableName: string): boolean {
+    const walk = (from: any): boolean => {
+      if (!from) return false;
+      if (from.table_name === tableName) return true;
+      if (from.type === "JOIN") return walk(from.left) || walk(from.right);
+      return false;
+    };
+    return walk(selectNode.from_table);
+  }
+
   private static readonly COMPARISON_MAP: Record<string, string> = {
     COMPARE_EQUAL: "=",
     COMPARE_NOTEQUAL: "!=",
@@ -124,110 +177,92 @@ export class QueryEngine {
     "!~~*": "NOT ILIKE",
   };
 
-  private async extractQuals(
-    sql: string,
-    keyColNames: string[],
-  ): Promise<Qual[]> {
-    const escaped = sql.replace(/'/g, "''");
-    const result = await this.db.all(
-      `SELECT json_serialize_sql('${escaped}') as ast`,
-    );
-    const ast = JSON.parse(result[0].ast);
-    if (ast.error || !ast.statements?.[0]?.node?.where_clause) return [];
+  private walkWhere(node: any, keySet: Set<string>, quals: Qual[]): void {
+    if (!node) return;
 
-    const keySet = new Set(keyColNames);
-    const quals: Qual[] = [];
+    // AND/OR — recurse into children
+    if (node.class === "CONJUNCTION") {
+      for (const child of node.children ?? []) this.walkWhere(child, keySet, quals);
+      return;
+    }
 
-    const extractValue = (v: any): any => {
-      if (!v) return null;
-      return v.is_null ? null : v.value;
-    };
+    // NOT — recurse into child
+    if (node.type === "OPERATOR_NOT") {
+      for (const child of node.children ?? []) this.walkWhere(child, keySet, quals);
+      return;
+    }
 
-    const walk = (node: any): void => {
-      if (!node) return;
-
-      // AND/OR — recurse into children
-      if (node.class === "CONJUNCTION") {
-        for (const child of node.children ?? []) walk(child);
-        return;
+    // Simple comparisons: =, !=, >, <, >=, <=
+    if (node.class === "COMPARISON") {
+      const op = QueryEngine.COMPARISON_MAP[node.type];
+      const colName = node.left?.column_names?.at(-1);
+      if (op && colName && keySet.has(colName)) {
+        quals.push({
+          column: colName,
+          operator: op,
+          value: extractAstValue(node.right?.value),
+        });
       }
+      return;
+    }
 
-      // NOT — recurse into child
-      if (node.type === "OPERATOR_NOT") {
-        for (const child of node.children ?? []) walk(child);
-        return;
+    // BETWEEN
+    if (node.class === "BETWEEN") {
+      const colName = node.input?.column_names?.at(-1);
+      if (colName && keySet.has(colName)) {
+        quals.push({
+          column: colName,
+          operator: "BETWEEN",
+          value: [extractAstValue(node.lower?.value), extractAstValue(node.upper?.value)],
+        });
       }
+      return;
+    }
 
-      // Simple comparisons: =, !=, >, <, >=, <=
-      if (node.class === "COMPARISON") {
-        const op = QueryEngine.COMPARISON_MAP[node.type];
-        const colName = node.left?.column_names?.[0];
-        if (op && colName && keySet.has(colName)) {
-          quals.push({
-            column: colName,
-            operator: op,
-            value: extractValue(node.right?.value),
-          });
-        }
-        return;
-      }
-
-      // BETWEEN: col BETWEEN lower AND upper
-      if (node.class === "BETWEEN") {
-        const colName = node.input?.column_names?.[0];
-        if (colName && keySet.has(colName)) {
-          quals.push({
-            column: colName,
-            operator: "BETWEEN",
-            value: [extractValue(node.lower?.value), extractValue(node.upper?.value)],
-          });
-        }
-        return;
-      }
-
-      // IN / NOT IN: first child is column, rest are values
-      if (node.type === "COMPARE_IN" || node.type === "COMPARE_NOT_IN") {
-        const colName = node.children?.[0]?.column_names?.[0];
-        if (colName && keySet.has(colName)) {
-          const values = node.children.slice(1).map((c: any) => extractValue(c.value));
+    // IN / NOT IN
+    if (node.type === "COMPARE_IN" || node.type === "COMPARE_NOT_IN") {
+      const colName = node.children?.[0]?.column_names?.at(-1);
+      if (colName && keySet.has(colName)) {
+        const values = node.children
+          .slice(1)
+          .filter((c: any) => c.class === "CONSTANT")
+          .map((c: any) => extractAstValue(c.value));
+        if (values.length > 0) {
           quals.push({
             column: colName,
             operator: node.type === "COMPARE_IN" ? "IN" : "NOT IN",
             value: values,
           });
         }
-        return;
       }
+      return;
+    }
 
-      // IS NULL / IS NOT NULL
-      if (node.type === "OPERATOR_IS_NULL" || node.type === "OPERATOR_IS_NOT_NULL") {
-        const colName = node.children?.[0]?.column_names?.[0];
-        if (colName && keySet.has(colName)) {
-          quals.push({
-            column: colName,
-            operator: node.type === "OPERATOR_IS_NULL" ? "IS NULL" : "IS NOT NULL",
-            value: null,
-          });
-        }
-        return;
+    // IS NULL / IS NOT NULL
+    if (node.type === "OPERATOR_IS_NULL" || node.type === "OPERATOR_IS_NOT_NULL") {
+      const colName = node.children?.[0]?.column_names?.at(-1);
+      if (colName && keySet.has(colName)) {
+        quals.push({
+          column: colName,
+          operator: node.type === "OPERATOR_IS_NULL" ? "IS NULL" : "IS NOT NULL",
+          value: null,
+        });
       }
+      return;
+    }
 
-      // LIKE / ILIKE / NOT LIKE / NOT ILIKE
-      if (node.class === "FUNCTION" && node.function_name in QueryEngine.FUNCTION_MAP) {
-        const colName = node.children?.[0]?.column_names?.[0];
-        if (colName && keySet.has(colName)) {
-          quals.push({
-            column: colName,
-            operator: QueryEngine.FUNCTION_MAP[node.function_name],
-            value: extractValue(node.children?.[1]?.value),
-          });
-        }
-        return;
+    // LIKE / ILIKE / NOT LIKE / NOT ILIKE
+    if (node.class === "FUNCTION" && node.function_name in QueryEngine.FUNCTION_MAP) {
+      const colName = node.children?.[0]?.column_names?.at(-1);
+      if (colName && keySet.has(colName)) {
+        quals.push({
+          column: colName,
+          operator: QueryEngine.FUNCTION_MAP[node.function_name],
+          value: extractAstValue(node.children?.[1]?.value),
+        });
       }
-    };
-
-    walk(ast.statements[0].node.where_clause);
-    return quals;
+      return;
+    }
   }
 
   private async populateTable(
@@ -335,8 +370,9 @@ export class QueryEngine {
       }
     }
 
+    const ast = await this.parseAst(sql);
     for (const reg of referencedTables) {
-      const quals = await this.extractQuals(sql, reg.keyColNames);
+      const quals = this.extractQualsForTable(ast, reg.table.name, reg.keyColNames);
       await this.populateTable(reg, quals);
     }
 
@@ -357,6 +393,11 @@ export class QueryEngine {
   async close(): Promise<void> {
     await this.db.close();
   }
+}
+
+function extractAstValue(v: any): any {
+  if (!v) return null;
+  return v.is_null ? null : v.value;
 }
 
 function toArrowType(type: ColumnType): arrow.DataType {

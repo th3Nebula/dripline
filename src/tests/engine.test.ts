@@ -207,6 +207,167 @@ describe("QueryEngine", () => {
     assert.equal(nameQual, undefined);
   });
 
+  // Shared plugin for subquery/JOIN/CTE qual extraction tests
+  function makeShopPlugin(captures: {
+    ordersCtx: QueryContext | null;
+    itemsCtx: QueryContext | null;
+  }): PluginDef {
+    return {
+      name: "shop",
+      version: "0.1.0",
+      tables: [
+        {
+          name: "shop_orders",
+          columns: [
+            { name: "id", type: "number" },
+            { name: "status", type: "string" },
+            { name: "business_date", type: "string" },
+          ],
+          keyColumns: [
+            { name: "org_id", required: "required" },
+            { name: "status", required: "optional" },
+            { name: "business_date", required: "optional" },
+          ],
+          *list(ctx) {
+            captures.ordersCtx = ctx;
+            yield { id: 1, org_id: "org1", status: "closed", business_date: "2026-04-03" };
+            yield { id: 2, org_id: "org1", status: "open", business_date: "2026-04-03" };
+            yield { id: 3, org_id: "org1", status: "closed", business_date: "2026-04-02" };
+          },
+        },
+        {
+          name: "shop_order_items",
+          columns: [
+            { name: "order_id", type: "number" },
+            { name: "name", type: "string" },
+            { name: "quantity", type: "number" },
+          ],
+          keyColumns: [{ name: "org_id", required: "required" }],
+          *list(ctx) {
+            captures.itemsCtx = ctx;
+            yield { order_id: 1, org_id: "org1", name: "Pizza", quantity: 2 };
+            yield { order_id: 2, org_id: "org1", name: "Salad", quantity: 1 };
+          },
+        },
+      ],
+    };
+  }
+
+  it("extracts quals from subquery in IN clause", async () => {
+    const ctx = { ordersCtx: null as QueryContext | null, itemsCtx: null as QueryContext | null };
+    await setup({ plugins: [makeShopPlugin(ctx)] });
+    await engine.query(`
+      SELECT name, SUM(quantity) as qty
+      FROM shop_order_items
+      WHERE org_id = 'org1'
+        AND order_id IN (
+          SELECT id FROM shop_orders
+          WHERE org_id = 'org1'
+            AND business_date = '2026-04-03'
+            AND status = 'closed'
+        )
+      GROUP BY name
+    `);
+
+    assert.ok(ctx.itemsCtx);
+    assert.equal(ctx.itemsCtx.quals.find((q: any) => q.column === "org_id")?.value, "org1");
+
+    assert.ok(ctx.ordersCtx);
+    assert.equal(ctx.ordersCtx.quals.find((q: any) => q.column === "org_id")?.value, "org1");
+    assert.equal(ctx.ordersCtx.quals.find((q: any) => q.column === "business_date")?.value, "2026-04-03");
+    assert.equal(ctx.ordersCtx.quals.find((q: any) => q.column === "status")?.value, "closed");
+  });
+
+  it("extracts quals from aliased JOIN", async () => {
+    const ctx = { ordersCtx: null as QueryContext | null, itemsCtx: null as QueryContext | null };
+    await setup({ plugins: [makeShopPlugin(ctx)] });
+    await engine.query(`
+      SELECT oi.name
+      FROM shop_order_items oi
+      JOIN shop_orders o ON oi.order_id = o.id
+      WHERE oi.org_id = 'org1' AND o.status = 'closed'
+    `);
+
+    assert.ok(ctx.itemsCtx);
+    assert.equal(ctx.itemsCtx.quals.find((q: any) => q.column === "org_id")?.value, "org1");
+
+    assert.ok(ctx.ordersCtx);
+    assert.equal(ctx.ordersCtx.quals.find((q: any) => q.column === "status")?.value, "closed");
+  });
+
+  it("extracts quals from CTE", async () => {
+    const ctx = { ordersCtx: null as QueryContext | null, itemsCtx: null as QueryContext | null };
+    await setup({ plugins: [makeShopPlugin(ctx)] });
+    await engine.query(`
+      WITH closed_orders AS (
+        SELECT id FROM shop_orders
+        WHERE org_id = 'org1' AND status = 'closed' AND business_date = '2026-04-03'
+      )
+      SELECT name FROM shop_order_items
+      WHERE org_id = 'org1' AND order_id IN (SELECT id FROM closed_orders)
+    `);
+
+    assert.ok(ctx.ordersCtx);
+    assert.equal(ctx.ordersCtx.quals.find((q: any) => q.column === "org_id")?.value, "org1");
+    assert.equal(ctx.ordersCtx.quals.find((q: any) => q.column === "status")?.value, "closed");
+    assert.equal(ctx.ordersCtx.quals.find((q: any) => q.column === "business_date")?.value, "2026-04-03");
+  });
+
+  it("extracts quals from EXISTS subquery", async () => {
+    const ctx = { ordersCtx: null as QueryContext | null, itemsCtx: null as QueryContext | null };
+    await setup({ plugins: [makeShopPlugin(ctx)] });
+    await engine.query(`
+      SELECT name FROM shop_order_items oi
+      WHERE oi.org_id = 'org1'
+        AND EXISTS (
+          SELECT 1 FROM shop_orders o
+          WHERE o.id = oi.order_id
+            AND o.org_id = 'org1'
+            AND o.status = 'closed'
+        )
+    `);
+
+    assert.ok(ctx.ordersCtx);
+    assert.equal(ctx.ordersCtx.quals.find((q: any) => q.column === "org_id")?.value, "org1");
+    assert.equal(ctx.ordersCtx.quals.find((q: any) => q.column === "status")?.value, "closed");
+  });
+
+  it("extracts quals from derived table (subquery in FROM)", async () => {
+    const ctx = { ordersCtx: null as QueryContext | null, itemsCtx: null as QueryContext | null };
+    await setup({ plugins: [makeShopPlugin(ctx)] });
+    await engine.query(`
+      SELECT sub.id FROM (
+        SELECT id FROM shop_orders
+        WHERE org_id = 'org1' AND status = 'closed'
+      ) sub
+    `);
+
+    assert.ok(ctx.ordersCtx);
+    assert.equal(ctx.ordersCtx.quals.find((q: any) => q.column === "org_id")?.value, "org1");
+    assert.equal(ctx.ordersCtx.quals.find((q: any) => q.column === "status")?.value, "closed");
+  });
+
+  it("extracts quals from nested subquery (subquery within subquery)", async () => {
+    const ctx = { ordersCtx: null as QueryContext | null, itemsCtx: null as QueryContext | null };
+    await setup({ plugins: [makeShopPlugin(ctx)] });
+    await engine.query(`
+      SELECT * FROM shop_order_items
+      WHERE org_id = 'org1'
+        AND order_id IN (
+          SELECT id FROM shop_orders
+          WHERE org_id = 'org1'
+            AND status IN (
+              SELECT 'closed'
+            )
+            AND business_date = '2026-04-03'
+        )
+    `);
+
+    assert.ok(ctx.ordersCtx);
+    assert.equal(ctx.ordersCtx.quals.find((q: any) => q.column === "org_id")?.value, "org1");
+    assert.equal(ctx.ordersCtx.quals.find((q: any) => q.column === "business_date")?.value, "2026-04-03");
+  });
+
   it("non-key WHERE filtered by DuckDB", async () => {
     await setup();
     const rows = await engine.query("SELECT * FROM users WHERE name = 'Alice'");
