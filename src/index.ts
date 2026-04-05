@@ -56,6 +56,7 @@ export type { DriplineOptions } from "./sdk.js";
 export type { ExecOptions, ExecResult, OutputParser } from "./utils/cli.js";
 export { commandExists, syncExec } from "./utils/cli.js";
 export { formatCsv, formatJson, formatLine } from "./utils/formatters.js";
-export { asyncGet, asyncGetPaginated } from "./utils/async-http.js";
+export type { HttpResponse } from "./utils/http.js";
 export { syncGet, syncGetPaginated } from "./utils/http.js";
+export { asyncGet, asyncGetPaginated } from "./utils/async-http.js";
 export { formatTable } from "./utils/table-formatter.js";

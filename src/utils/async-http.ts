@@ -1,8 +1,4 @@
-export interface HttpResponse {
-  status: number;
-  body: any;
-  headers: Record<string, string>;
-}
+import type { HttpResponse } from "./http.js";
 
 /** Async HTTP GET using native fetch. */
 export async function asyncGet(
