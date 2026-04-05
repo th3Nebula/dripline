@@ -17,7 +17,7 @@ npm run build
 ## Architecture
 
 ```
-SQL query > CLI/SDK > QueryEngine > DuckDB > Plugin (sync generator) > API/CLI
+SQL query > CLI/SDK > QueryEngine > DuckDB > Plugin (sync/async generator) > API/CLI
 ```
 
 ### Layers
@@ -36,7 +36,8 @@ SQL query > CLI/SDK > QueryEngine > DuckDB > Plugin (sync generator) > API/CLI
 | Plugin Loader | `src/plugin/loader.ts` | Discovery, loading from paths/dirs |
 | Plugin Installer | `src/plugin/installer.ts` | npm/git/local install, `plugins.json` |
 | Config | `src/config/` | `.dripline/config.json`, env var resolution |
-| HTTP | `src/utils/http.ts` | `syncGet`, `syncGetPaginated` (curl-based) |
+| HTTP (sync) | `src/utils/http.ts` | `syncGet`, `syncGetPaginated` (curl-based) |
+| HTTP (async) | `src/utils/async-http.ts` | `asyncGet`, `asyncGetPaginated` (native fetch) |
 | CLI exec | `src/utils/cli.ts` | `syncExec`, `commandExists` (for wrapping local CLIs) |
 | Formatters | `src/utils/` | Table, JSON, CSV, line output, spinner |
 
@@ -62,10 +63,12 @@ Plugins live in `plugins/` as npm workspaces. Core ships with zero plugins.
 
 ## Writing a Plugin
 
-Two patterns: **API plugins** use `syncGet`/`syncGetPaginated`, **CLI plugins** use `syncExec`.
+Three patterns: **sync API** uses `syncGet`/`syncGetPaginated`, **async API** uses `asyncGet`/`asyncGetPaginated`, **CLI** uses `syncExec`.
+
+Plugins can use sync or async generators — the engine handles both transparently.
 
 ```typescript
-// API plugin
+// Sync API plugin
 import type { DriplinePluginAPI } from "dripline";
 import { syncGetPaginated } from "dripline";
 
@@ -98,6 +101,39 @@ export default function(dl: DriplinePluginAPI) {
 ```
 
 ```typescript
+// Async API plugin (native fetch, non-blocking)
+import type { DriplinePluginAPI } from "dripline";
+import { asyncGetPaginated } from "dripline";
+
+export default function(dl: DriplinePluginAPI) {
+  dl.setName("myplugin_async");
+  dl.setVersion("1.0.0");
+  dl.setConnectionSchema({
+    api_key: { type: "string", required: true, env: "MY_API_KEY" },
+  });
+
+  dl.registerTable("my_table", {
+    columns: [
+      { name: "id", type: "number" },
+      { name: "name", type: "string" },
+    ],
+    keyColumns: [
+      { name: "org", required: "required" },
+    ],
+    async *list(ctx) {
+      const org = ctx.quals.find(q => q.column === "org")?.value;
+      if (!org) return;
+      const headers = { Authorization: `Bearer ${ctx.connection.config.api_key}` };
+      const data = await asyncGetPaginated(`https://api.example.com/orgs/${org}/items`, headers);
+      for (const item of data) {
+        yield { id: item.id, name: item.name };
+      }
+    },
+  });
+}
+```
+
+```typescript
 // CLI plugin
 import type { DriplinePluginAPI } from "dripline";
 import { syncExec } from "dripline";
@@ -121,7 +157,61 @@ export default function(dl: DriplinePluginAPI) {
 
 `syncExec` parsers: `json`, `jsonlines`, `csv`, `tsv`, `lines`, `kv`, `raw`.
 
-Plugins are sync generators. Data is materialized into DuckDB temp tables before query execution. Key column values are extracted from WHERE clauses and passed to plugins as quals. Non-key WHERE clauses are filtered by DuckDB after materialization.
+Plugins use sync or async generators. Data is materialized into DuckDB temp tables before query execution. Key column values are extracted from WHERE clauses and passed to plugins as quals. Non-key WHERE clauses are filtered by DuckDB after materialization.
+
+## Incremental Sync
+
+The SDK supports persistent sync into an external DuckDB database. Two modes, no overlap:
+
+- **Ephemeral mode** (no `database` option): `query()` materializes fresh every time. `sync()` throws.
+- **External DB mode** (`database` + `schema`): `sync()` persists data. `query()` reads what's there.
+
+```typescript
+import { Database } from "duckdb-async";
+import { Dripline } from "dripline";
+
+const db = await Database.create("./analytics.duckdb");
+const dl = await Dripline.create({
+  plugins: [myPlugin],
+  database: db,
+  schema: "workspace_1",
+});
+
+await dl.sync({ my_table: { org: "acme" } });
+const rows = await dl.query('SELECT * FROM "workspace_1"."my_table"');
+
+await dl.close(); // does NOT close the shared database
+await db.close();
+```
+
+Sync strategy is determined automatically from the table definition:
+
+| `cursor` | `primaryKey` | Strategy |
+|----------|-------------|----------|
+| no | no | Full replace |
+| no | yes | Full replace + dedup |
+| yes | no | Incremental append |
+| yes | yes | Incremental append + dedup |
+
+```typescript
+dl.registerTable("events", {
+  columns: [
+    { name: "id", type: "number" },
+    { name: "data", type: "json" },
+    { name: "updated_at", type: "datetime" },
+  ],
+  primaryKey: ["id"],          // row identity for dedup
+  cursor: "updated_at",        // high-water mark for incremental sync
+  async *list(ctx) {
+    // ctx.cursor?.value is the last synced updated_at (null on first sync)
+    const since = ctx.cursor?.value ?? "1970-01-01T00:00:00Z";
+    const data = await asyncGetPaginated(`https://api.example.com/events?since=${since}`);
+    for (const e of data) yield e;
+  },
+});
+```
+
+The engine filters rows engine-side as a safety net — even if the plugin yields old rows, no duplicates. Cursors are scoped per params, so syncing the same table with different params (e.g. `org=a` vs `org=b`) maintains independent high-water marks. Ingestion is batched (10k rows) for constant memory usage regardless of dataset size.
 
 ## Config
 

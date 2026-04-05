@@ -79,7 +79,7 @@ WHERE prompt = 'generate 5 fictional engineers with name, age, city';
 
 ## Writing a Plugin
 
-Plugins are sync generators. Wrap an API with `syncGet`/`syncGetPaginated` or a local CLI with `syncExec`.
+Plugins use sync or async generators. Wrap an API with `syncGet`/`syncGetPaginated` (sync, curl-based) or `asyncGet`/`asyncGetPaginated` (async, native fetch), or a local CLI with `syncExec`.
 
 ```typescript
 import type { DriplinePluginAPI } from "dripline";
@@ -185,6 +185,7 @@ REPL commands: `.tables`, `.inspect <table>`, `.connections`, `.output <format>`
 import { Dripline } from "dripline";
 import githubPlugin from "dripline-plugin-github";
 
+// Ephemeral mode — query fresh every time
 const dl = await Dripline.create({
   plugins: [githubPlugin],
   connections: [{ name: "gh", plugin: "github", config: { token: "ghp_xxx" } }],
@@ -193,6 +194,40 @@ const dl = await Dripline.create({
 const repos = await dl.query("SELECT name FROM github_repos WHERE owner = 'torvalds' LIMIT 5");
 await dl.close();
 ```
+
+### Incremental Sync
+
+Sync plugin data into a persistent DuckDB database with cursor-based incremental updates:
+
+```typescript
+import { Database } from "duckdb-async";
+import { Dripline } from "dripline";
+
+const db = await Database.create("./analytics.duckdb");
+const dl = await Dripline.create({
+  plugins: [githubPlugin],
+  database: db,       // external DB — dripline won't close it
+  schema: "ws_1",     // namespace all tables under this schema
+});
+
+// Pull data — only new rows since last sync
+await dl.sync({ github_issues: { owner: "vercel", repo: "next.js" } });
+
+// Query persisted data
+const issues = await dl.query('SELECT state, COUNT(*) as cnt FROM "ws_1"."github_issues" GROUP BY state');
+
+await dl.close(); // does NOT close the shared database
+await db.close();
+```
+
+The sync strategy is determined automatically from the table definition:
+
+| `cursor` | `primaryKey` | Strategy |
+|----------|-------------|----------|
+| no | no | Full replace |
+| no | yes | Full replace + dedup |
+| yes | no | Incremental append |
+| yes | yes | Incremental append + dedup |
 
 ## Configuration
 
