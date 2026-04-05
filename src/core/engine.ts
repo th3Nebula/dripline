@@ -649,7 +649,10 @@ export class QueryEngine {
 
     for (const [tableName, reg] of tablesToSync) {
       const start = Date.now();
-      const params = syncParams?.[tableName] ?? {};
+      const params = {
+        ...reg.table.syncParams,
+        ...syncParams?.[tableName],
+      };
       const pk = this.paramsKey(params);
       try {
         const result = await this.syncTable(reg, params);

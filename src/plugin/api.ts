@@ -21,6 +21,8 @@ export interface TableDefinition {
   keyColumns?: KeyColumn[];
   /** Row identity columns for deduplication during sync. */
   primaryKey?: string[];
+  /** Default params for sync() — used when caller doesn't provide params for this table. */
+  syncParams?: Record<string, any>;
   /** Column name used as high-water mark for incremental sync. Type inferred from columns[]. */
   cursor?: string;
   list: ListFunc;

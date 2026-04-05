@@ -446,6 +446,100 @@ describe("sync() — cursor scoped to params", () => {
   });
 });
 
+describe("sync() — plugin-level syncParams", () => {
+  afterEach(cleanup);
+
+  it("uses syncParams as defaults", async () => {
+    let receivedQuals: any[] = [];
+    const plugin: PluginDef = {
+      name: "defaults",
+      version: "1.0.0",
+      tables: [
+        {
+          name: "items",
+          columns: [
+            { name: "id", type: "number" },
+            { name: "name", type: "string" },
+          ],
+          keyColumns: [{ name: "org", required: "required" }],
+          syncParams: { org: "default-org" },
+          *list(ctx) {
+            receivedQuals = ctx.quals;
+            yield { id: 1, name: "a", org: "default-org" };
+          },
+        },
+      ],
+    };
+
+    await setup(plugin);
+    // No params passed — syncParams kicks in
+    await dl.sync();
+
+    assert.equal(receivedQuals.find((q) => q.column === "org")?.value, "default-org");
+  });
+
+  it("caller params override syncParams", async () => {
+    let receivedQuals: any[] = [];
+    const plugin: PluginDef = {
+      name: "override",
+      version: "1.0.0",
+      tables: [
+        {
+          name: "items",
+          columns: [
+            { name: "id", type: "number" },
+            { name: "name", type: "string" },
+          ],
+          keyColumns: [{ name: "org", required: "required" }],
+          syncParams: { org: "default-org" },
+          *list(ctx) {
+            receivedQuals = ctx.quals;
+            yield { id: 1, name: "a", org: "custom-org" };
+          },
+        },
+      ],
+    };
+
+    await setup(plugin);
+    await dl.sync({ items: { org: "custom-org" } });
+
+    assert.equal(receivedQuals.find((q) => q.column === "org")?.value, "custom-org");
+  });
+
+  it("merges syncParams with caller params", async () => {
+    let receivedQuals: any[] = [];
+    const plugin: PluginDef = {
+      name: "merge",
+      version: "1.0.0",
+      tables: [
+        {
+          name: "items",
+          columns: [
+            { name: "id", type: "number" },
+            { name: "name", type: "string" },
+          ],
+          keyColumns: [
+            { name: "org", required: "required" },
+            { name: "team", required: "optional" },
+          ],
+          syncParams: { org: "default-org", team: "default-team" },
+          *list(ctx) {
+            receivedQuals = ctx.quals;
+            yield { id: 1, name: "a", org: "default-org", team: "custom-team" };
+          },
+        },
+      ],
+    };
+
+    await setup(plugin);
+    // Override team, keep org from syncParams
+    await dl.sync({ items: { team: "custom-team" } });
+
+    assert.equal(receivedQuals.find((q) => q.column === "org")?.value, "default-org");
+    assert.equal(receivedQuals.find((q) => q.column === "team")?.value, "custom-team");
+  });
+});
+
 describe("sync() — metadata table", () => {
   afterEach(cleanup);
 
