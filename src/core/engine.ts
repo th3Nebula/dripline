@@ -769,6 +769,19 @@ export class QueryEngine {
       } catch {
         // No metadata yet — first sync
       }
+
+      // Backfill seed: if there's still no cursor (first sync ever for
+      // this (table, params) pair) and the plugin declared an
+      // `initialCursor`, use it. The plugin author knows what sentinel
+      // the upstream API expects; the user doesn't have to configure it.
+      if (cursorValue == null && table.initialCursor !== undefined) {
+        cursorValue =
+          typeof table.initialCursor === "function"
+            ? (table.initialCursor as (p: Record<string, any>) => unknown)(
+                params,
+              )
+            : table.initialCursor;
+      }
     }
 
     // Build context

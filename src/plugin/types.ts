@@ -55,6 +55,20 @@ export interface TableDef {
   syncParams?: Record<string, any>;
   /** Column name used as high-water mark for incremental sync. Type inferred from columns[]. */
   cursor?: string;
+  /**
+   * Default cursor value on the very first sync — i.e. the starting
+   * point of a backfill. Only consulted when `cursor` is set AND the
+   * engine has no prior metadata row for this (table, params) pair.
+   *
+   * Accepts a static value (e.g. `"2020-01-01T00:00:00Z"`) or a
+   * function of the sync params, which lets plugins express "last 30
+   * days" or "since the start of this quarter" without the user
+   * having to configure anything.
+   *
+   * Omit to backfill from whatever the plugin's `list()` picks when
+   * `ctx.cursor` is null (typically "all history").
+   */
+  initialCursor?: unknown | ((params: Record<string, any>) => unknown);
   list: ListFunc;
   get?: GetFunc;
   hydrate?: Record<string, HydrateFunc>;

@@ -30,7 +30,7 @@ export interface DriplineOptions {
 }
 
 export class Dripline {
-  private engine!: QueryEngine;
+  private _engine!: QueryEngine;
   private registry: PluginRegistry;
   private cache: QueryCache;
   private rateLimiter: RateLimiter;
@@ -67,10 +67,11 @@ export class Dripline {
         maxSize: this.options.cache?.maxSize ?? DEFAULT_CONFIG.cache.maxSize,
       },
       rateLimits: this.options.rateLimits ?? {},
+      lanes: {},
     };
 
-    this.engine = new QueryEngine(this.registry, this.cache, this.rateLimiter);
-    await this.engine.initialize(config, {
+    this._engine = new QueryEngine(this.registry, this.cache, this.rateLimiter);
+    await this._engine.initialize(config, {
       database: this.options.database,
       schema: this.options.schema,
     });
@@ -81,7 +82,7 @@ export class Dripline {
     sql: string,
     params?: any[],
   ): Promise<T[]> {
-    return this.engine.query(sql, params) as Promise<T[]>;
+    return this._engine.query(sql, params) as Promise<T[]>;
   }
 
   /** Register an additional plugin. Re-initializes the engine. */
@@ -91,7 +92,7 @@ export class Dripline {
   ): Promise<void> {
     const plugin = resolvePluginExport(pluginOrFn, "unknown");
     this.registry.register(plugin);
-    if (this.engine) await this.engine.close();
+    if (this._engine) await this._engine.close();
     const config: DriplineConfig = {
       connections: connections ?? this.options.connections ?? [],
       cache: {
@@ -100,9 +101,10 @@ export class Dripline {
         maxSize: 1000,
       },
       rateLimits: {},
+      lanes: {},
     };
-    this.engine = new QueryEngine(this.registry, this.cache, this.rateLimiter);
-    await this.engine.initialize(config);
+    this._engine = new QueryEngine(this.registry, this.cache, this.rateLimiter);
+    await this._engine.initialize(config);
   }
 
   /** Get cache statistics. */
@@ -141,11 +143,11 @@ export class Dripline {
   async sync(
     params?: Record<string, Record<string, any>>,
   ): Promise<SyncResult> {
-    return this.engine.sync(params);
+    return this._engine.sync(params);
   }
 
   /** Close the database. Does NOT close an externally-provided database. */
   async close(): Promise<void> {
-    await this.engine.close();
+    await this._engine.close();
   }
 }

@@ -31,6 +31,7 @@ export function loadConfig(): DriplineConfig {
     ...raw,
     cache: { ...DEFAULT_CONFIG.cache, ...raw.cache },
     rateLimits: { ...DEFAULT_CONFIG.rateLimits, ...raw.rateLimits },
+    lanes: { ...DEFAULT_CONFIG.lanes, ...raw.lanes },
   };
 }
 

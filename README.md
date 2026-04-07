@@ -13,8 +13,22 @@ npm install -g dripline
 ```bash
 dripline init
 dripline plugin install git:github.com/Michaelliv/dripline#plugins/docker
+
+# Local: query live APIs directly
 dripline query "SELECT name, image, state FROM docker_containers"
+
+# Warehouse: query accumulated history on R2 / S3 / MinIO
+dripline query --remote "SELECT COUNT(*) FROM github_issues WHERE state = 'open'"
 ```
+
+dripline has two modes that share the same SQL surface:
+
+- **Local** — plugins materialize tables on demand from live APIs. Zero infra.
+- **Warehouse** — `dripline run` syncs configured lanes into an S3-compatible
+  bucket as parquet; `dripline query --remote` reads the bucket. Same SQL, no
+  API calls, historical data.
+
+Skip to [Warehouse mode](#warehouse-mode) if you want the second tier.
 
 ## Plugins
 
@@ -75,6 +89,61 @@ WHERE r.owner = 'torvalds';
 SELECT data->>'name' as name, CAST(data->>'age' AS INT) as age
 FROM pi_generate
 WHERE prompt = 'generate 5 fictional engineers with name, age, city';
+```
+
+## Warehouse mode
+
+Turn dripline into a deployable data warehouse on top of any S3-compatible
+bucket (Cloudflare R2, MinIO, AWS S3). Plugins, engine, and SDK are unchanged
+— the warehouse layer is additive.
+
+**The idea:** `dripline run` periodically syncs tables into `raw/` as
+append-only parquet. `dripline compact` dedupes `raw/` into query-ready
+`curated/`. `dripline query --remote` reads `curated/` via DuckDB views. No
+scheduler service, no catalog — the bucket is the source of truth and the
+coordination layer (lease-based, one conditional PUT per lane).
+
+### 5-command quickstart
+
+```bash
+# 1. Initialize a dripline workspace
+dripline init
+
+# 2. Install a plugin
+dripline plugin install git:github.com/Michaelliv/dripline#plugins/github
+dripline connection add gh --plugin github --set token=ghp_xxx
+
+# 3. Point dripline at a bucket (env vars keep secrets out of config)
+export R2_KEY_ID=...
+export R2_SECRET=...
+dripline remote set https://<account>.r2.cloudflarestorage.com \
+  --bucket warehouse --prefix prod --secret-type R2 \
+  --access-key-env R2_KEY_ID --secret-key-env R2_SECRET
+
+# 4. Define a lane — a group of tables synced on a schedule
+dripline lane add fast \
+  --table github_issues --params owner=acme,repo=api \
+  --interval 15m
+
+# 5. Run it (and compact, and query)
+dripline run              # sync all due lanes, publish raw parquet
+dripline compact          # dedupe raw/ into curated/
+dripline query --remote "SELECT state, COUNT(*) FROM github_issues GROUP BY state"
+```
+
+Run `dripline run` from any cron, on any number of machines — workers compete
+for lanes via R2-native leases, so adding a worker is just another cron entry.
+No rebalancing, no leader election.
+
+### Layout in the bucket
+
+```
+<prefix>/
+  _leases/lane-<name>.json          ← work lease + cooldown timer
+  _state/<lane>/_dripline_sync.parquet  ← cursor metadata
+  raw/<table>/lane=<lane>/run=<id>.parquet  ← append-only bronze
+  curated/<table>/<hive>/part-0.parquet     ← compacted silver
+  _manifests/<table>.json           ← file index + stats
 ```
 
 ## Writing a Plugin
