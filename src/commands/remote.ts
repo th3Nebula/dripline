@@ -11,7 +11,19 @@
 import chalk from "chalk";
 import { loadConfig, saveConfig } from "../config/loader.js";
 import type { RemoteConfig } from "../config/types.js";
-import { bold, dim, error, success, warn } from "../utils/output.js";
+import { bold, dim, success, warn } from "../utils/output.js";
+
+/**
+ * Thrown for any user-facing config error. `main.ts` catches this and
+ * converts it to `process.exit(1)` with a clean message; tests catch
+ * it as an ordinary exception. Same pattern as `LaneConfigError`.
+ */
+export class RemoteConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RemoteConfigError";
+  }
+}
 
 export interface RemoteSetOptions {
   bucket: string;
@@ -30,31 +42,30 @@ export async function remoteSet(
   options: RemoteSetOptions,
 ): Promise<void> {
   if (!endpoint) {
-    error("endpoint is required");
-    process.exit(1);
+    throw new RemoteConfigError("endpoint is required");
   }
   if (!options.bucket) {
-    error("--bucket is required");
-    process.exit(1);
+    throw new RemoteConfigError("--bucket is required");
   }
 
   // Enforce exactly one credential path per field. Mixing inline and
   // env-var for the same field is almost always a misconfiguration.
   if (options.accessKey && options.accessKeyEnv) {
-    error("pass either --access-key or --access-key-env, not both");
-    process.exit(1);
+    throw new RemoteConfigError(
+      "pass either --access-key or --access-key-env, not both",
+    );
   }
   if (options.secretKey && options.secretKeyEnv) {
-    error("pass either --secret-key or --secret-key-env, not both");
-    process.exit(1);
+    throw new RemoteConfigError(
+      "pass either --secret-key or --secret-key-env, not both",
+    );
   }
   const hasAccess = Boolean(options.accessKey || options.accessKeyEnv);
   const hasSecret = Boolean(options.secretKey || options.secretKeyEnv);
   if (!hasAccess || !hasSecret) {
-    error(
+    throw new RemoteConfigError(
       "credentials required: pass --access-key/--secret-key or --access-key-env/--secret-key-env",
     );
-    process.exit(1);
   }
 
   const remote: RemoteConfig = {
