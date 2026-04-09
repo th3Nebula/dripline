@@ -70,6 +70,7 @@ export class Remote {
   private readonly aws: AwsClient;
   private readonly r: ResolvedRemote;
   private readonly fs: RemoteFS;
+  private attachedDbs = new WeakSet<Database>();
 
   constructor(cfg: RemoteConfig) {
     this.r = resolveRemote(cfg);
@@ -103,6 +104,7 @@ export class Remote {
    * based on `secretType` so the same code works against both.
    */
   async attach(db: Database): Promise<void> {
+    if (this.attachedDbs.has(db)) return;
     await db.exec(`INSTALL httpfs; LOAD httpfs;`);
     await db.exec(`DROP SECRET IF EXISTS dripline_remote;`);
 
@@ -125,23 +127,24 @@ export class Remote {
           ACCOUNT_ID '${esc(accountMatch[1])}'
         );
       `);
-      return;
+    } else {
+      // Generic S3 — works against MinIO, AWS, and any other S3-compatible store.
+      const useSsl = this.r.endpoint.startsWith("https://");
+      const endpointHost = this.r.endpoint.replace(/^https?:\/\//, "");
+      await db.exec(`
+        CREATE SECRET dripline_remote (
+          TYPE S3,
+          KEY_ID '${esc(this.r.accessKeyId)}',
+          SECRET '${esc(this.r.secretAccessKey)}',
+          ENDPOINT '${esc(endpointHost)}',
+          URL_STYLE 'path',
+          USE_SSL ${useSsl},
+          REGION '${esc(this.r.region)}'
+        );
+      `);
     }
 
-    // Generic S3 — works against MinIO, AWS, and any other S3-compatible store.
-    const useSsl = this.r.endpoint.startsWith("https://");
-    const endpointHost = this.r.endpoint.replace(/^https?:\/\//, "");
-    await db.exec(`
-      CREATE SECRET dripline_remote (
-        TYPE S3,
-        KEY_ID '${esc(this.r.accessKeyId)}',
-        SECRET '${esc(this.r.secretAccessKey)}',
-        ENDPOINT '${esc(endpointHost)}',
-        URL_STYLE 'path',
-        USE_SSL ${useSsl},
-        REGION '${esc(this.r.region)}'
-      );
-    `);
+    this.attachedDbs.add(db);
   }
 
   // ── Cursor state (per lane) ────────────────────────────────────────
