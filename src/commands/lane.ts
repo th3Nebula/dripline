@@ -14,10 +14,21 @@
 import chalk from "chalk";
 import { loadConfig, saveConfig } from "../config/loader.js";
 import type { LaneConfig, LaneTable } from "../config/types.js";
-import { laneStatePath, validateLane } from "../core/lanes.js";
-import { LeaseStore } from "../core/lease.js";
+import { validateLane } from "../core/lanes.js";
 import { Remote, resolveRemote } from "../core/remote.js";
-import { bold, dim, error, info, success, warn } from "../utils/output.js";
+import { bold, dim, info, success, warn } from "../utils/output.js";
+
+/**
+ * Thrown for any user-facing config error. `main.ts` catches this and
+ * converts it to `process.exit(1)` with a clean message; tests catch
+ * it as an ordinary exception. Same pattern as `RunConfigError`.
+ */
+export class LaneConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LaneConfigError";
+  }
+}
 
 export interface LaneAddOptions {
   /**
@@ -65,12 +76,10 @@ export async function laneAdd(
   options: LaneAddOptions,
 ): Promise<void> {
   if (!options.table || options.table.length === 0) {
-    error("at least one --table is required");
-    process.exit(1);
+    throw new LaneConfigError("at least one --table is required");
   }
   if (!options.interval) {
-    error("--interval is required (e.g. --interval 15m)");
-    process.exit(1);
+    throw new LaneConfigError("--interval is required (e.g. --interval 15m)");
   }
 
   // Pair up tables with their corresponding --params entry by index.
@@ -79,10 +88,13 @@ export async function laneAdd(
   for (let i = 0; i < options.table.length; i++) {
     try {
       const params = parseParams(options.params?.[i]);
-      tables.push(params ? { name: options.table[i], params } : { name: options.table[i] });
+      tables.push(
+        params
+          ? { name: options.table[i], params }
+          : { name: options.table[i] },
+      );
     } catch (e) {
-      error(`lane "${name}": ${(e as Error).message}`);
-      process.exit(1);
+      throw new LaneConfigError(`lane "${name}": ${(e as Error).message}`);
     }
   }
 
@@ -96,14 +108,14 @@ export async function laneAdd(
   try {
     validateLane(name, lane);
   } catch (e) {
-    error(`lane "${name}": ${(e as Error).message}`);
-    process.exit(1);
+    throw new LaneConfigError(`lane "${name}": ${(e as Error).message}`);
   }
 
   const config = loadConfig();
   if (config.lanes[name] && !options.force) {
-    error(`lane "${name}" already exists. Use --force to overwrite.`);
-    process.exit(1);
+    throw new LaneConfigError(
+      `lane "${name}" already exists. Use --force to overwrite.`,
+    );
   }
   config.lanes[name] = lane;
   saveConfig(config);
@@ -127,8 +139,7 @@ export async function laneRemove(
       console.log(JSON.stringify({ success: false, name }));
       return;
     }
-    error(`Lane not found: ${name}`);
-    process.exit(1);
+    throw new LaneConfigError(`Lane not found: ${name}`);
   }
   delete config.lanes[name];
   saveConfig(config);
@@ -157,52 +168,47 @@ export async function laneRemove(
  */
 export async function laneReset(
   name: string,
-  options: { yes?: boolean; json?: boolean },
+  options: { yes?: boolean; json?: boolean; hard?: boolean },
 ): Promise<void> {
   const config = loadConfig();
   if (!config.lanes[name]) {
-    error(`Lane not found: ${name}`);
-    process.exit(1);
+    throw new LaneConfigError(`Lane not found: ${name}`);
   }
   if (!config.remote) {
-    error(
+    throw new LaneConfigError(
       "no remote configured. Set one with `dripline remote set` first.",
     );
-    process.exit(1);
   }
 
   if (!options.yes && !options.json) {
-    warn(
-      `This will delete _state/${name}/ and release the lane lease. raw/ and curated/ are untouched.`,
-    );
-    warn("Re-run with --yes to confirm.");
-    process.exit(1);
+    const desc = options.hard
+      ? `This will delete _state/${name}/ and release the lane lease. raw/ and curated/ are untouched.`
+      : `This will release the lane lease for ${name}. Cursor state is preserved.`;
+    warn(desc);
+    throw new LaneConfigError("Re-run with --yes to confirm.");
   }
 
-  const resolved = resolveRemote(config.remote);
+  resolveRemote(config.remote);
   const remote = new Remote(config.remote);
-  const leases = LeaseStore.fromRemote(resolved);
 
-  // Wipe state: list everything under `_state/<lane>/` and bulk-delete.
-  // Using the list-then-delete dance (instead of deleting the one known
-  // file) keeps this forward-compatible if we ever stash extra state
-  // files per lane.
-  const stateKeys = await remote.listObjects(`_state/${name}/`);
-  if (stateKeys.length > 0) {
-    await remote.deleteObjects(stateKeys);
+  // Wipe cursor state only with --hard.
+  let stateKeys: string[] = [];
+  if (options.hard) {
+    stateKeys = await remote.listObjects(`_state/${name}/`);
+    if (stateKeys.length > 0) {
+      await remote.deleteObjects(stateKeys);
+    }
   }
 
   // Also drop the lease so the next run can start immediately rather
-  // than waiting for cooldown to expire. We reuse listObjects —
-  // deleting the lease file directly is fine because the lease store
-  // is holder-checked on write, not on existence.
+  // than waiting for cooldown to expire. The lease store is
+  // holder-checked on write, not on existence, so a plain delete is
+  // safe.
   const leaseKey = `_leases/lane-${name}.json`;
   const leaseKeys = await remote.listObjects(leaseKey);
   if (leaseKeys.length > 0) {
     await remote.deleteObjects(leaseKeys);
   }
-  void leases; // referenced for future per-table reset; keeps import alive
-  void laneStatePath; // same — reserved for per-table filtering later
 
   if (options.json) {
     console.log(
@@ -216,10 +222,14 @@ export async function laneReset(
     return;
   }
 
-  success(
-    `Reset lane ${bold(name)}: ${stateKeys.length} state file(s), ${leaseKeys.length} lease(s) deleted.`,
-  );
-  info("Next `dripline run` will backfill per each table's initialCursor.");
+  if (options.hard) {
+    success(
+      `Reset lane ${bold(name)}: ${stateKeys.length} state file(s), ${leaseKeys.length} lease(s) deleted.`,
+    );
+    info("Next `dripline run` will backfill per each table's initialCursor.");
+  } else {
+    success(`Released lease for lane ${bold(name)}. Cursor state preserved.`);
+  }
 }
 
 export async function laneList(options: { json?: boolean }): Promise<void> {

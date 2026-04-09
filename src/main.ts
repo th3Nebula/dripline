@@ -9,10 +9,20 @@ import {
   connectionRemove,
 } from "./commands/connection.js";
 import { init } from "./commands/init.js";
-import { laneAdd, laneList, laneRemove, laneReset } from "./commands/lane.js";
+import {
+  LaneConfigError,
+  laneAdd,
+  laneList,
+  laneRemove,
+  laneReset,
+} from "./commands/lane.js";
 import { pluginInstall, pluginList, pluginRemove } from "./commands/plugin.js";
 import { query } from "./commands/query.js";
-import { remoteSet, remoteShow } from "./commands/remote.js";
+import {
+  RemoteConfigError,
+  remoteSet,
+  remoteShow,
+} from "./commands/remote.js";
 import { repl } from "./commands/repl.js";
 import { RunConfigError, run } from "./commands/run.js";
 import { tables } from "./commands/tables.js";
@@ -290,17 +300,25 @@ of .dripline/config.json.`,
   )
   .action(async (endpoint, opts, cmd) => {
     const globals = cmd.optsWithGlobals();
-    await remoteSet(endpoint, {
-      bucket: opts.bucket,
-      prefix: opts.prefix,
-      region: opts.region,
-      secretType: opts.secretType,
-      accessKey: opts.accessKey,
-      secretKey: opts.secretKey,
-      accessKeyEnv: opts.accessKeyEnv,
-      secretKeyEnv: opts.secretKeyEnv,
-      json: globals.json,
-    });
+    try {
+      await remoteSet(endpoint, {
+        bucket: opts.bucket,
+        prefix: opts.prefix,
+        region: opts.region,
+        secretType: opts.secretType,
+        accessKey: opts.accessKey,
+        secretKey: opts.secretKey,
+        accessKeyEnv: opts.accessKeyEnv,
+        secretKeyEnv: opts.secretKeyEnv,
+        json: globals.json,
+      });
+    } catch (e) {
+      if (e instanceof RemoteConfigError) {
+        console.error(e.message);
+        process.exit(1);
+      }
+      throw e;
+    }
   });
 
 remoteCmd
@@ -353,14 +371,22 @@ for a param-less table that sits between others that have params.`,
   )
   .action(async (name, opts, cmd) => {
     const globals = cmd.optsWithGlobals();
-    await laneAdd(name, {
-      table: opts.table,
-      params: opts.params,
-      interval: opts.interval,
-      maxRuntime: opts.maxRuntime,
-      force: opts.force,
-      json: globals.json,
-    });
+    try {
+      await laneAdd(name, {
+        table: opts.table,
+        params: opts.params,
+        interval: opts.interval,
+        maxRuntime: opts.maxRuntime,
+        force: opts.force,
+        json: globals.json,
+      });
+    } catch (e) {
+      if (e instanceof LaneConfigError) {
+        console.error(e.message);
+        process.exit(1);
+      }
+      throw e;
+    }
   });
 
 laneCmd
@@ -368,24 +394,44 @@ laneCmd
   .description("Remove a lane")
   .action(async (name, _opts, cmd) => {
     const globals = cmd.optsWithGlobals();
-    await laneRemove(name, { json: globals.json });
+    try {
+      await laneRemove(name, { json: globals.json });
+    } catch (e) {
+      if (e instanceof LaneConfigError) {
+        console.error(e.message);
+        process.exit(1);
+      }
+      throw e;
+    }
   });
 
 laneCmd
   .command("reset <name>")
-  .description("Reset a lane's cursor state — next run will backfill")
+  .description("Release a lane's lease (or fully reset with --hard)")
   .option("--yes", "Skip the confirmation prompt")
+  .option("--hard", "Also delete cursor state — next run will backfill from scratch")
   .addHelpText(
     "after",
     `
-Deletes _state/<lane>/ and the lane's lease from the remote bucket.
-raw/ and curated/ are untouched — historical data stays. The next
-\`dripline run\` will see "first sync ever" for each table and
-backfill according to each plugin's initialCursor.`,
+By default, releases the lane's lease so the next run can start
+immediately. Cursor state is preserved — sync resumes where it
+left off.
+
+With --hard, also deletes _state/<lane>/. The next \`dripline run\`
+will see "first sync ever" and backfill according to each plugin's
+initialCursor. raw/ and curated/ are never touched.`,
   )
   .action(async (name, opts, cmd) => {
     const globals = cmd.optsWithGlobals();
-    await laneReset(name, { yes: opts.yes, json: globals.json });
+    try {
+      await laneReset(name, { yes: opts.yes, json: globals.json, hard: opts.hard });
+    } catch (e) {
+      if (e instanceof LaneConfigError) {
+        console.error(e.message);
+        process.exit(1);
+      }
+      throw e;
+    }
   });
 
 laneCmd
