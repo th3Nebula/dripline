@@ -47,6 +47,11 @@ jobs:
       - name: Build
         run: npm run build
       - name: Publish to npm
-        run: npm publish
+        run: |
+          if echo "${{ github.ref_name }}" | grep -qE '(rc|alpha|beta)'; then
+            npm publish --tag next
+          else
+            npm publish
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
