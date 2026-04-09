@@ -31,6 +31,10 @@ export interface SyncTableResult {
   durationMs: number;
 }
 
+import type { SyncProgressEvent } from "../plugin/types.js";
+
+export type SyncProgressCallback = (event: SyncProgressEvent) => void;
+
 export interface SyncResult {
   tables: SyncTableResult[];
   errors: Array<{ table: string; plugin: string; error: string }>;
@@ -617,6 +621,7 @@ export class QueryEngine {
   /** Sync tables from plugins into persistent storage. */
   async sync(
     syncParams?: Record<string, Record<string, any>>,
+    onProgress?: SyncProgressCallback,
   ): Promise<SyncResult> {
     if (this.ownsDb) {
       throw new Error(
@@ -655,7 +660,7 @@ export class QueryEngine {
       };
       const pk = this.paramsKey(params);
       try {
-        const result = await this.syncTable(reg, params);
+        const result = await this.syncTable(reg, params, onProgress);
         results.push(result);
 
         // Update metadata
@@ -724,6 +729,7 @@ export class QueryEngine {
   private async syncTable(
     reg: RegisteredTable,
     params: Record<string, any>,
+    onProgress?: SyncProgressCallback,
   ): Promise<SyncTableResult> {
     const start = Date.now();
     const { table, pluginName } = reg;
@@ -868,6 +874,9 @@ export class QueryEngine {
       batch.push(row);
       if (batch.length >= BATCH_SIZE) {
         await flushBatch();
+        if (onProgress) {
+          onProgress({ table: table.name, rowsInserted, cursor: newCursor, elapsedMs: Date.now() - start });
+        }
       }
     }
     await flushBatch();

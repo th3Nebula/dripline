@@ -23,6 +23,7 @@ import { Remote, resolveRemote } from "../core/remote.js";
 import { loadAllPlugins } from "../plugin/loader.js";
 import { registry } from "../plugin/registry.js";
 import { Dripline } from "../sdk.js";
+import type { SyncProgressEvent } from "../plugin/types.js";
 import { error, info, jsonOutput, success, warn } from "../utils/output.js";
 
 export interface RunOptions {
@@ -184,7 +185,12 @@ async function runLane(
       // making progress.
       const tablesPublished = new Set<string>();
       for (const t of lane.tables) {
-        const result = await dl.sync({ [t.name]: { ...t.params } });
+        const onProgress = ctx.quiet || ctx.json ? undefined : (ev: SyncProgressEvent) => {
+          const rate = ev.elapsedMs > 0 ? (ev.rowsInserted / (ev.elapsedMs / 1000)).toFixed(1) : "?";
+          const cursor = ev.cursor != null ? ` cursor=${ev.cursor}` : "";
+          log(info, `${ev.table}: ${ev.rowsInserted.toLocaleString()} rows (${rate}/s${cursor})`);
+        };
+        const result = await dl.sync({ [t.name]: { ...t.params } }, onProgress);
         for (const r of result.tables) {
           syncedTables++;
           rowsInserted += r.rowsInserted;

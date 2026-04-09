@@ -709,6 +709,169 @@ describe("sync() — async generator plugin", () => {
   });
 });
 
+describe("sync() — onProgress callback", () => {
+  afterEach(cleanup);
+
+  it("fires progress events every batch", async () => {
+    const ROW_COUNT = 25_000; // 2.5 batches at 10k
+    const plugin: PluginDef = {
+      name: "progress_test",
+      version: "1.0.0",
+      tables: [
+        {
+          name: "big",
+          columns: [
+            { name: "id", type: "number" },
+            { name: "val", type: "string" },
+          ],
+          *list() {
+            for (let i = 0; i < ROW_COUNT; i++) {
+              yield { id: i, val: `row-${i}` };
+            }
+          },
+        },
+      ],
+    };
+
+    await setup(plugin);
+    const events: Array<{ table: string; rowsInserted: number; elapsedMs: number }> = [];
+    await dl.sync(undefined, (ev) => events.push(ev));
+
+    // 25k rows at 10k batch = 2 progress events (after batch 1 and batch 2)
+    assert.ok(events.length >= 2, `expected >= 2 progress events, got ${events.length}`);
+    assert.equal(events[0].table, "big");
+    assert.equal(events[0].rowsInserted, 10_000);
+    assert.equal(events[1].rowsInserted, 20_000);
+    for (const ev of events) {
+      assert.ok(ev.elapsedMs > 0);
+    }
+  });
+
+  it("includes cursor value in progress events", async () => {
+    const ROW_COUNT = 15_000;
+    const plugin: PluginDef = {
+      name: "progress_cursor",
+      version: "1.0.0",
+      tables: [
+        {
+          name: "events",
+          columns: [
+            { name: "id", type: "number" },
+            { name: "ts", type: "datetime" },
+          ],
+          cursor: "ts",
+          *list() {
+            for (let i = 0; i < ROW_COUNT; i++) {
+              yield { id: i, ts: `2024-01-${String(1 + Math.floor(i / 500)).padStart(2, "0")}` };
+            }
+          },
+        },
+      ],
+    };
+
+    await setup(plugin);
+    const events: Array<{ cursor: unknown }> = [];
+    await dl.sync(undefined, (ev) => events.push(ev));
+
+    assert.ok(events.length >= 1);
+    assert.ok(events[0].cursor != null, "cursor should be non-null");
+  });
+
+  it("does not fire for small datasets (< batch size)", async () => {
+    const plugin: PluginDef = {
+      name: "small",
+      version: "1.0.0",
+      tables: [
+        {
+          name: "tiny",
+          columns: [{ name: "id", type: "number" }],
+          *list() {
+            for (let i = 0; i < 100; i++) yield { id: i };
+          },
+        },
+      ],
+    };
+
+    await setup(plugin);
+    const events: unknown[] = [];
+    await dl.sync(undefined, (ev) => events.push(ev));
+
+    assert.equal(events.length, 0, "no progress events for sub-batch datasets");
+  });
+});
+
+describe("sync() — cursor format mismatch (ISO datetime vs plain date)", () => {
+  afterEach(cleanup);
+
+  it("plugin must normalize ISO datetime cursors before appending time suffixes", async () => {
+    // Pattern test: initialCursor is "2025-01-01" (plain date), but rows
+    // yield business_date as "2025-01-15T00:00:00.000Z" (ISO datetime).
+    // On the second sync, ctx.cursor.value is the ISO string. Plugins that
+    // naively do `${cursor}T00:00:00.000Z` produce garbage. This test
+    // documents the correct pattern: normalize to YYYY-MM-DD first.
+    let callCount = 0;
+    const capturedCursors: any[] = [];
+    const capturedFromValues: string[] = [];
+
+    const plugin: PluginDef = {
+      name: "cursor_fmt",
+      version: "1.0.0",
+      tables: [
+        {
+          name: "orders",
+          columns: [
+            { name: "id", type: "number" },
+            { name: "business_date", type: "string" },
+          ],
+          primaryKey: ["id"],
+          cursor: "business_date",
+          initialCursor: "2025-01-01",
+          *list(ctx) {
+            callCount++;
+            capturedCursors.push(ctx.cursor);
+
+            // Simulate: plugin uses cursor to build a date range.
+            // Fix: normalize to YYYY-MM-DD before appending time suffix.
+            const raw = ctx.cursor?.value ?? "2025-01-01";
+            const from = typeof raw === "string" && raw.includes("T") ? raw.slice(0, 10) : raw;
+            const fromParam = `${from}T00:00:00.000Z`;
+            capturedFromValues.push(fromParam);
+
+            if (callCount === 1) {
+              // First sync: yield rows with ISO datetime business_date
+              yield { id: 1, business_date: "2025-01-15T00:00:00.000Z" };
+              yield { id: 2, business_date: "2025-02-01T00:00:00.000Z" };
+            } else {
+              // Second sync: yield newer rows
+              yield { id: 3, business_date: "2025-03-01T00:00:00.000Z" };
+            }
+          },
+        },
+      ],
+    };
+
+    await setup(plugin);
+
+    // First sync — cursor starts as initialCursor "2025-01-01" (plain date)
+    await dl.sync();
+    assert.equal(capturedCursors[0]?.value, "2025-01-01");
+    // Plugin appends T00:00:00.000Z — fine on first call, produces valid ISO
+    assert.equal(capturedFromValues[0], "2025-01-01T00:00:00.000Z");
+
+    // Second sync — cursor is now "2025-02-01T00:00:00.000Z" (ISO datetime from rows)
+    await dl.sync();
+    assert.equal(capturedCursors[1]?.value, "2025-02-01T00:00:00.000Z");
+
+    // After fix: plugin normalizes cursor to YYYY-MM-DD before appending time suffix.
+    // Without the fix this would be "2025-02-01T00:00:00.000ZT00:00:00.000Z"
+    assert.ok(
+      !capturedFromValues[1].includes("T00:00:00.000ZT00:00:00.000Z"),
+      `Double-suffix bug! Got: ${capturedFromValues[1]}`,
+    );
+    assert.equal(capturedFromValues[1], "2025-02-01T00:00:00.000Z");
+  });
+});
+
 describe("query() with external DB", () => {
   afterEach(cleanup);
 

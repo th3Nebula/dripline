@@ -102,3 +102,10 @@ export interface RateLimitConfig {
   maxPerMinute?: number;
   maxConcurrent?: number;
 }
+
+export interface SyncProgressEvent {
+  table: string;
+  rowsInserted: number;
+  cursor: unknown;
+  elapsedMs: number;
+}

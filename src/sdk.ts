@@ -3,7 +3,7 @@ import type { DriplineConfig } from "./config/types.js";
 import { DEFAULT_CONFIG } from "./config/types.js";
 import { QueryCache } from "./core/cache.js";
 import { QueryEngine } from "./core/engine.js";
-import type { SyncResult } from "./core/engine.js";
+import type { SyncResult, SyncProgressCallback } from "./core/engine.js";
 import { RateLimiter } from "./core/rate-limiter.js";
 import type { PluginFunction } from "./plugin/api.js";
 import { resolvePluginExport } from "./plugin/api.js";
@@ -142,8 +142,9 @@ export class Dripline {
    */
   async sync(
     params?: Record<string, Record<string, any>>,
+    onProgress?: SyncProgressCallback,
   ): Promise<SyncResult> {
-    return this._engine.sync(params);
+    return this._engine.sync(params, onProgress);
   }
 
   /** Close the database. Does NOT close an externally-provided database. */
