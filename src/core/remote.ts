@@ -483,14 +483,28 @@ export class Remote {
   ): Promise<void> {
     await this.attach(db);
     const qn = `"${schema}"."${table}"`;
-    // union_by_name forces DuckDB to read every file's schema over S3,
-    // which takes 20-50s on tables with thousands of partition files.
-    // Curated files from compact() share an identical schema, so it's
-    // unnecessary — DuckDB infers the schema from the first file.
-    await db.exec(`
-      CREATE OR REPLACE VIEW ${qn} AS
-      SELECT * FROM ${this.curatedRead(table)};
-    `);
+
+    // Use manifest file list when available — avoids the S3 LIST + per-file
+    // schema scan that globs trigger. DuckDB gets an explicit array of URLs
+    // and only reads one footer for the schema. Falls back to glob when
+    // no manifest exists (before first compact).
+    const manifest = await this.readManifest(table);
+    if (manifest && manifest.files.length > 0) {
+      const files = manifest.files.map((f) => f.path as string);
+      const partitioned = (manifest.partition_by?.length ?? 0) > 0;
+      const fileList = files.map((f) => `'${f}'`).join(", ");
+      await db.exec(`
+        CREATE OR REPLACE VIEW ${qn} AS
+        SELECT * FROM read_parquet([${fileList}],
+          hive_partitioning => ${partitioned});
+      `);
+    } else {
+      // No manifest — fall back to glob discovery.
+      await db.exec(`
+        CREATE OR REPLACE VIEW ${qn} AS
+        SELECT * FROM ${this.curatedRead(table)};
+      `);
+    }
   }
 }
 
