@@ -97,6 +97,21 @@ export class Remote {
     return `s3://${this.r.bucket}/${k.replace(/^\//, "")}`;
   }
 
+  /** DuckDB read_parquet() expression for curated data. Always uses
+   *  `**\/*.parquet` with `hive_partitioning => true` — unpartitioned
+   *  tables write into a `_/` subdirectory so the glob matches both. */
+  curatedRead(
+    table: string,
+    extra?: Record<string, string | boolean>,
+  ): string {
+    const url = this.s3(`curated/${table}/**/*.parquet`);
+    const opts = { hive_partitioning: true, ...extra };
+    const params = Object.entries(opts)
+      .map(([k, v]) => `${k} => ${v}`)
+      .join(", ");
+    return `read_parquet('${url}', ${params})`;
+  }
+
   // ── DuckDB attachment ──────────────────────────────────────────────
 
   /**
@@ -287,11 +302,14 @@ export class Remote {
     const curatedCount = await this.countObjects(`curated/${table}/`);
 
     const raw = this.s3(`raw/${table}/**/*.parquet`);
-    const curated = this.s3(`curated/${table}/**/*.parquet`);
-    const curatedDir = this.s3(`curated/${table}`);
     const pk = opts.primaryKey.map((c) => `"${c}"`).join(", ");
     const orderBy = opts.cursor ? `"${opts.cursor}" DESC NULLS LAST` : pk;
     const parts = (opts.partitionBy ?? []).map((c) => `"${c}"`);
+    // Unpartitioned tables write into a `_/` subdirectory so that
+    // `**/*.parquet` with `hive_partitioning => true` works uniformly.
+    const writeDir = parts.length > 0
+      ? this.s3(`curated/${table}`)
+      : this.s3(`curated/${table}/_`);
     // rawRead is referenced twice: once to extract partition literals,
     // once inside the COPY. DuckDB downloads the raw files from S3
     // twice — acceptable since raw is small (one sync run's output).
@@ -332,8 +350,7 @@ export class Remote {
     const curatedUnion =
       curatedCount > 0
         ? `UNION ALL BY NAME
-           SELECT * FROM read_parquet('${curated}',
-             union_by_name => true, hive_partitioning => true)
+           SELECT * FROM ${this.curatedRead(table)}
            ${curatedFilter}`
         : "";
 
@@ -345,13 +362,13 @@ export class Remote {
           ) AS _rn
           FROM (SELECT * FROM ${rawRead} ${curatedUnion})
         ) WHERE _rn = 1
-      ) TO '${curatedDir}'
+      ) TO '${writeDir}'
       (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 1000000
-       ${parts.length > 0 ? `, PARTITION_BY (${parts.join(", ")}), OVERWRITE_OR_IGNORE` : ", OVERWRITE_OR_IGNORE"});
+       ${parts.length > 0 ? `, PARTITION_BY (${parts.join(", ")}), OVERWRITE_OR_IGNORE` : ""});
     `);
 
     const stats = await db.all(
-      `SELECT COUNT(*) AS n FROM read_parquet('${curated}', hive_partitioning => true);`,
+      `SELECT COUNT(*) AS n FROM ${this.curatedRead(table)};`,
     );
     const rows = Number((stats[0] as { n: bigint | number })?.n ?? 0);
     const files = await this.refreshManifest(db, table, opts.partitionBy ?? []);
@@ -381,7 +398,6 @@ export class Remote {
     table: string,
     partitionBy: string[],
   ): Promise<number> {
-    const curatedGlob = this.s3(`curated/${table}/**/*.parquet`);
     const partCols = partitionBy.map((c) => `"${c}"`).join(", ");
 
     const filesRows = (await db.all(`
@@ -391,9 +407,7 @@ export class Remote {
         ${partitionBy
           .map((c) => `, MIN("${c}") AS "min_${c}", MAX("${c}") AS "max_${c}"`)
           .join("")}
-      FROM read_parquet('${curatedGlob}',
-        hive_partitioning => true,
-        filename => true)
+      FROM ${this.curatedRead(table, { filename: true })}
       GROUP BY filename ${partCols.length > 0 ? `, ${partCols}` : ""}
       ORDER BY filename;
     `)) as Array<Record<string, unknown>>;
@@ -468,7 +482,6 @@ export class Remote {
     schema = "main",
   ): Promise<void> {
     await this.attach(db);
-    const curatedGlob = this.s3(`curated/${table}/**/*.parquet`);
     const qn = `"${schema}"."${table}"`;
     // union_by_name forces DuckDB to read every file's schema over S3,
     // which takes 20-50s on tables with thousands of partition files.
@@ -476,8 +489,7 @@ export class Remote {
     // unnecessary — DuckDB infers the schema from the first file.
     await db.exec(`
       CREATE OR REPLACE VIEW ${qn} AS
-      SELECT * FROM read_parquet('${curatedGlob}',
-        hive_partitioning => true);
+      SELECT * FROM ${this.curatedRead(table)};
     `);
   }
 }
