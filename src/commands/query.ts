@@ -86,10 +86,14 @@ async function runRemoteQuery(sql: string): Promise<Record<string, unknown>[]> {
       .filter((f) => f.endsWith(".json"))
       .map((f) => f.slice(0, -".json".length));
 
-    // attachTable creates a view, not a materialized read — it
-    // never touches the data. SELECT against an empty/missing
-    // table will surface a clear DuckDB error to the user.
-    await Promise.all(tables.map((table) => remote.attachTable(db, table)));
+    // Only attach tables referenced in the query. Each attachTable
+    // fires an S3 LIST + parquet footer read (~1s each), so attaching
+    // all tables adds 15s+ of overhead for a single-table query.
+    const sqlLower = sql.toLowerCase();
+    const referenced = tables.filter((t) => sqlLower.includes(t.toLowerCase()));
+    // Fall back to all tables for SHOW TABLES, information_schema, etc.
+    const toAttach = referenced.length > 0 ? referenced : tables;
+    await Promise.all(toAttach.map((table) => remote.attachTable(db, table)));
 
     return (await db.all(sql)) as Record<string, unknown>[];
   } finally {
