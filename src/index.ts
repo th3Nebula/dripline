@@ -51,6 +51,8 @@ export type {
   RateLimitConfig,
   TableDef,
 } from "./plugin/types.js";
+export { Remote } from "./core/remote.js";
+export type { RemoteConfig } from "./config/types.js";
 export { Dripline } from "./sdk.js";
 export type { DriplineOptions } from "./sdk.js";
 export type { ExecOptions, ExecResult, OutputParser } from "./utils/cli.js";
